@@ -17,12 +17,34 @@ type ChunkInfo struct {
 	Primary         string
 	LeaseExpiration time.Time
 	StaleReplicas   map[string]bool
+	
+	// Snapshot support - reference counting for copy-on-write
+	RefCount        int32          // Number of files/snapshots referencing this chunk
+	IsSnapshot      bool          // True if this chunk was created via CoW
+	OriginalHandle  string        // Original chunk handle for CoW chunks
+	
 	mu              sync.RWMutex
 }
 
 type FileInfo struct {
 	Chunks map[int64]string
+	
+	// Snapshot support
+	IsSnapshot     bool      // True if this file is a snapshot
+	SnapshotTime   time.Time // When snapshot was created
+	OriginalPath   string    // Original file path for snapshots
+	
 	mu     sync.RWMutex
+}
+
+// SnapshotInfo tracks snapshot metadata
+type SnapshotInfo struct {
+	SnapshotPath   string    // Path where snapshot is stored
+	OriginalPath   string    // Original file/directory path
+	CreationTime   time.Time // When snapshot was created
+	ChunkHandles   []string  // List of chunk handles in snapshot
+	IsDirectory    bool      // True if snapshot is of a directory
+	mu             sync.RWMutex
 }
 
 type ServerInfo struct {
@@ -51,6 +73,12 @@ type Master struct {
 
 	deletedChunks   map[string]bool
 	deletedChunksMu sync.RWMutex
+
+	// Snapshot management
+	snapshots   map[string]*SnapshotInfo // snapshot_path -> snapshot info
+	snapshotsMu sync.RWMutex
+	nextChunkHandle int64 // For generating new chunk handles during CoW
+	chunkHandleMu sync.Mutex
 
 	// Server management
 	servers   map[string]*ServerInfo // server_id -> server info

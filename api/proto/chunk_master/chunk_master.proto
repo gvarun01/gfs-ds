@@ -33,6 +33,7 @@ message RequestLeaseResponse {
     bool granted = 2;
     int64 lease_expiration = 3;
     int32 version = 4;
+    common.ChunkHandle chunk_handle = 5;  // Chunk handle to use (may be new after CoW)
 }
 
 message ChunkStatus {
@@ -64,9 +65,11 @@ message ChunkCommand {
         DELETE = 3;
         INIT_EMPTY = 4;
         UPDATE_VERSION = 5;
+        COPY = 6;  // Copy chunk for copy-on-write snapshots
     }
     CommandType type = 1;
     common.ChunkHandle chunk_handle = 2;
     repeated common.ChunkLocation target_locations = 3;
     int32 version = 4;
+    string source_chunk_handle = 5;  // Source chunk for COPY operations
 }

@@ -275,6 +275,9 @@ func (cs *ChunkServer) handleChunkCommand(cmd *chunk_pb.ChunkCommand) error {
 	case chunk_pb.ChunkCommand_UPDATE_VERSION:
 		return cs.handleUpdateVersion(cmd)
 
+	case chunk_pb.ChunkCommand_COPY:
+		return cs.handleCopyChunk(cmd)
+
 	case chunk_pb.ChunkCommand_NONE:
 		return nil
 
@@ -427,6 +430,96 @@ func (cs *ChunkServer) handleDelete(cmd *chunk_pb.ChunkCommand) error {
 	return nil
 }
 
+func (cs *ChunkServer) handleCopyChunk(cmd *chunk_pb.ChunkCommand) error {
+	if cmd.ChunkHandle == nil || cmd.SourceChunkHandle == "" {
+		return fmt.Errorf("received copy command with missing chunk handles")
+	}
+
+	sourceHandle := cmd.SourceChunkHandle
+	targetHandle := cmd.ChunkHandle.Handle
+
+	log.Printf("Copying chunk %s to %s", sourceHandle, targetHandle)
+
+	// Check if source chunk exists
+	sourcePath := filepath.Join(cs.serverDir, sourceHandle+".chunk")
+	_, err := os.Stat(sourcePath)
+	if err != nil {
+		return fmt.Errorf("source chunk %s does not exist: %v", sourceHandle, err)
+	}
+
+	// Check if target chunk already exists
+	targetPath := filepath.Join(cs.serverDir, targetHandle+".chunk")
+	if _, err := os.Stat(targetPath); err == nil {
+		// Target already exists, no need to copy
+		log.Printf("Target chunk %s already exists, skipping copy", targetHandle)
+	} else {
+		// Copy the chunk file
+		err = cs.copyChunkFile(sourcePath, targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to copy chunk file: %v", err)
+		}
+	}
+
+	// Get source chunk metadata to copy
+	cs.mu.RLock()
+	sourceMetadata, exists := cs.chunks[sourceHandle]
+	cs.mu.RUnlock()
+	
+	if !exists {
+		// Create metadata from file info if not in memory
+		info, err := os.Stat(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to get target file info: %v", err)
+		}
+		sourceMetadata = &ChunkMetadata{
+			Size:         info.Size(),
+			LastModified: info.ModTime(),
+		}
+	}
+
+	// Add target chunk metadata
+	cs.mu.Lock()
+	cs.chunks[targetHandle] = &ChunkMetadata{
+		Size:         sourceMetadata.Size,
+		LastModified: time.Now(), // New modification time for copy
+	}
+	cs.mu.Unlock()
+
+	log.Printf("Successfully copied chunk %s to %s", sourceHandle, targetHandle)
+	return nil
+}
+
+// copyChunkFile performs the actual file copy operation
+func (cs *ChunkServer) copyChunkFile(sourcePath, targetPath string) error {
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to open source file: %v", err)
+	}
+	defer sourceFile.Close()
+
+	targetFile, err := os.Create(targetPath)
+	if err != nil {
+		return fmt.Errorf("failed to create target file: %v", err)
+	}
+	defer targetFile.Close()
+
+	// Copy the file content
+	_, err = io.Copy(targetFile, sourceFile)
+	if err != nil {
+		// Clean up target file on failure
+		os.Remove(targetPath)
+		return fmt.Errorf("failed to copy file content: %v", err)
+	}
+
+	// Sync to ensure data is written to disk
+	err = targetFile.Sync()
+	if err != nil {
+		return fmt.Errorf("failed to sync target file: %v", err)
+	}
+
+	return nil
+}
+
 func (cs *ChunkServer) handleBecomePrimary(cmd *chunk_pb.ChunkCommand) error {
 	if cmd.ChunkHandle == nil {
 		return fmt.Errorf("received become primary command with nil chunk handle")
@@ -502,9 +595,36 @@ func (cs *ChunkServer) requestLease(chunkHandle string) error {
 	}
 
 	if resp.Granted {
-		cs.leases[chunkHandle] = time.Now().Add(time.Duration(resp.LeaseExpiration) * time.Second)
-		cs.chunkPrimary[chunkHandle] = true
-		log.Printf("Acquired lease for chunk %s until %v", chunkHandle, cs.leases[chunkHandle])
+		// Check if master returned a different chunk handle due to copy-on-write
+		actualChunkHandle := chunkHandle
+		if resp.ChunkHandle != nil && resp.ChunkHandle.Handle != "" && resp.ChunkHandle.Handle != chunkHandle {
+			actualChunkHandle = resp.ChunkHandle.Handle
+			log.Printf("Copy-on-write occurred: original %s -> new %s", chunkHandle, actualChunkHandle)
+			
+			// Update internal state to use the new chunk handle
+			cs.mu.Lock()
+			if chunkMetadata, exists := cs.chunks[chunkHandle]; exists {
+				// Copy metadata to new handle and remove old entry
+				cs.chunks[actualChunkHandle] = chunkMetadata
+				delete(cs.chunks, chunkHandle)
+			}
+			
+			// Update lease and primary status for new chunk handle
+			if oldLease, exists := cs.leases[chunkHandle]; exists {
+				cs.leases[actualChunkHandle] = oldLease
+				delete(cs.leases, chunkHandle)
+			}
+			
+			if isPrimary := cs.chunkPrimary[chunkHandle]; isPrimary {
+				cs.chunkPrimary[actualChunkHandle] = true
+				delete(cs.chunkPrimary, chunkHandle)
+			}
+			cs.mu.Unlock()
+		}
+		
+		cs.leases[actualChunkHandle] = time.Now().Add(time.Duration(resp.LeaseExpiration) * time.Second)
+		cs.chunkPrimary[actualChunkHandle] = true
+		log.Printf("Acquired lease for chunk %s until %v", actualChunkHandle, cs.leases[actualChunkHandle])
 	} else {
 		delete(cs.leases, chunkHandle)
 		delete(cs.chunkPrimary, chunkHandle)

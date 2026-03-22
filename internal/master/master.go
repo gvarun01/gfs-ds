@@ -28,12 +28,14 @@ func (s *MasterServer) Stop() {
 
 func NewMaster(config *Config) *Master {
 	m := &Master{
-		Config:        config,
-		namespace:     NewBTreeNamespace(),
-		chunks:        make(map[string]*ChunkInfo),
-		deletedChunks: make(map[string]bool),
-		servers:       make(map[string]*ServerInfo),
-		pendingOps:    make(map[string][]*PendingOperation),
+		Config:          config,
+		namespace:       NewBTreeNamespace(),
+		chunks:          make(map[string]*ChunkInfo),
+		deletedChunks:   make(map[string]bool),
+		snapshots:       make(map[string]*SnapshotInfo),
+		nextChunkHandle: 1000000, // Start chunk handles at 1M for CoW chunks
+		servers:         make(map[string]*ServerInfo),
+		pendingOps:      make(map[string][]*PendingOperation),
 		chunkServerMgr: &ChunkServerManager{
 			activeStreams: make(map[string]chan *chunk_pb.HeartBeatResponse),
 		},
@@ -207,6 +209,55 @@ func (s *MasterServer) RequestLease(ctx context.Context, req *chunk_pb.RequestLe
 	}
 
 	chunkInfo.mu.Lock()
+	
+	// Check if copy-on-write is needed before proceeding with lease
+	actualChunkHandle := req.ChunkHandle.Handle
+	if chunkInfo.RefCount > 1 {
+		log.Printf("Copy-on-write triggered for chunk %s (refcount: %d) during lease request", 
+			req.ChunkHandle.Handle, chunkInfo.RefCount)
+		
+		chunkInfo.mu.Unlock() // Unlock before calling handleCopyOnWrite
+		
+		// Get target servers from original chunk
+		chunkInfo.mu.RLock()
+		targetServers := make([]string, 0, len(chunkInfo.Locations))
+		for serverId := range chunkInfo.Locations {
+			targetServers = append(targetServers, serverId)
+		}
+		chunkInfo.mu.RUnlock()
+		
+		// Perform copy-on-write
+		newChunkHandle, err := s.Master.handleCopyOnWrite(req.ChunkHandle.Handle, targetServers)
+		if err != nil {
+			return &chunk_pb.RequestLeaseResponse{
+				Status: &common_pb.Status{
+					Code:    common_pb.Status_ERROR,
+					Message: fmt.Sprintf("copy-on-write failed: %v", err),
+				},
+				Granted: false,
+			}, nil
+		}
+		
+		// If CoW created a new chunk, update the handle and get new chunk info
+		if newChunkHandle != req.ChunkHandle.Handle {
+			actualChunkHandle = newChunkHandle
+			s.Master.chunksMu.RLock()
+			chunkInfo = s.Master.chunks[newChunkHandle]
+			s.Master.chunksMu.RUnlock()
+			
+			if chunkInfo == nil {
+				return &chunk_pb.RequestLeaseResponse{
+					Status: &common_pb.Status{
+						Code:    common_pb.Status_ERROR,
+						Message: "new chunk not found after copy-on-write",
+					},
+					Granted: false,
+				}, nil
+			}
+		}
+		
+		chunkInfo.mu.Lock()
+	}
 	defer chunkInfo.mu.Unlock()
 
 	// Check if the requesting server has the latest version
@@ -238,7 +289,7 @@ func (s *MasterServer) RequestLease(ctx context.Context, req *chunk_pb.RequestLe
 	updateCommand := &chunk_pb.ChunkCommand{
 		Type: chunk_pb.ChunkCommand_UPDATE_VERSION,
 		ChunkHandle: &common_pb.ChunkHandle{
-			Handle: req.ChunkHandle.Handle,
+			Handle: actualChunkHandle, // Use actual chunk handle (may be new after CoW)
 		},
 		Version: newVersion,
 	}
@@ -256,7 +307,7 @@ func (s *MasterServer) RequestLease(ctx context.Context, req *chunk_pb.RequestLe
 			case responseChan <- response:
 				numVersionUpdates = numVersionUpdates + 1
 				log.Printf("Sent version update command to server %s for chunk %s (version %d)",
-					serverId, req.ChunkHandle.Handle, newVersion)
+					serverId, actualChunkHandle, newVersion)
 			default:
 				log.Printf("Warning: Failed to send version update to server %s (channel full)", serverId)
 			}
@@ -266,16 +317,19 @@ func (s *MasterServer) RequestLease(ctx context.Context, req *chunk_pb.RequestLe
 	s.Master.chunkServerMgr.mu.RUnlock()
 
 	if numVersionUpdates > 0 {
-		s.Master.incrementChunkVersion(req.ChunkHandle.Handle, chunkInfo)
+		s.Master.incrementChunkVersion(actualChunkHandle, chunkInfo)
 	}
 
-	log.Printf("Extending Lease for server %v for chunkhandle %v", req.ServerId, req.ChunkHandle.Handle)
+	log.Printf("Extending Lease for server %v for chunkhandle %v", req.ServerId, actualChunkHandle)
 
 	return &chunk_pb.RequestLeaseResponse{
 		Status:          &common_pb.Status{Code: common_pb.Status_OK},
 		Granted:         true,
 		LeaseExpiration: chunkInfo.LeaseExpiration.Unix(),
 		Version:         chunkInfo.Version,
+		ChunkHandle: &common_pb.ChunkHandle{
+			Handle: actualChunkHandle, // Return the actual chunk handle (may be new after CoW)
+		},
 	}, nil
 }
 
