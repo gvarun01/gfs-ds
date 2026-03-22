@@ -15,11 +15,11 @@ func (m *Master) LoadMetadata(path string) error {
 			return err
 		}
 		log.Printf("Metadata file doesn't exist, starting with empty state.")
-		// Initialize empty maps if metadata file doesn't exist
+		// Initialize empty namespace if metadata file doesn't exist
 		m.filesMu.Lock()
 		m.chunksMu.Lock()
-		if m.files == nil {
-			m.files = make(map[string]*FileInfo)
+		if m.namespace == nil {
+			m.namespace = NewBTreeNamespace()
 		}
 		if m.chunks == nil {
 			m.chunks = make(map[string]*ChunkInfo)
@@ -39,16 +39,22 @@ func (m *Master) LoadMetadata(path string) error {
 		m.filesMu.Lock()
 		m.chunksMu.Lock()
 
-		// Initialize maps if they're nil
-		if m.files == nil {
-			m.files = make(map[string]*FileInfo)
+		// Initialize namespace if it's nil
+		if m.namespace == nil {
+			m.namespace = NewBTreeNamespace()
 		}
 		if m.chunks == nil {
 			m.chunks = make(map[string]*ChunkInfo)
 		}
 
-		// Copy files data directly
-		m.files = metadata.Files
+		// Migrate flat file structure to B-tree namespace
+		for filePath, fileInfo := range metadata.Files {
+			if err := m.namespace.CreateFile(filePath, fileInfo); err != nil {
+				// If it's a directory creation error, try creating parent directories first
+				// For now, log and continue - we can enhance directory creation later
+				log.Printf("Warning: Could not migrate file %s to B-tree namespace: %v", filePath, err)
+			}
+		}
 
 		// Convert stored chunk info to full chunk info
 		for chunkID, storedInfo := range metadata.Chunks {
@@ -80,11 +86,14 @@ func (m *Master) checkpointMetadata() error {
 		}
 	}
 
+	// Extract all files from B-tree namespace for checkpointing
+	allFiles := m.namespace.GetAllFiles()
+
 	metadata := struct {
 		Files  map[string]*FileInfo  `json:"files"`
 		Chunks map[string]*ChunkInfo `json:"chunks"`
 	}{
-		Files:  m.files,
+		Files:  allFiles,
 		Chunks: storedChunks,
 	}
 

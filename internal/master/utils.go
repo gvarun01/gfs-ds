@@ -503,7 +503,9 @@ func (m *Master) getExpiredDeletedFiles() []string {
 	m.filesMu.RLock()
 	defer m.filesMu.RUnlock()
 
-	for deletedPath := range m.files {
+	// Get all files from B-tree namespace
+	allFiles := m.namespace.GetAllFiles()
+	for deletedPath := range allFiles {
 		if strings.HasPrefix(deletedPath, m.Config.Deletion.TrashDirPrefix) {
 			parts := strings.Split(strings.TrimPrefix(deletedPath, m.Config.Deletion.TrashDirPrefix), "_")
 			if len(parts) != 2 {
@@ -530,8 +532,8 @@ func (m *Master) processGCBatch(deletedPaths []string) {
 	defer m.filesMu.Unlock()
 
 	for _, deletedPath := range deletedPaths {
-		fileInfo, exists := m.files[deletedPath]
-		if !exists {
+		fileInfo, err := m.namespace.GetFile(deletedPath)
+		if err != nil {
 			continue
 		}
 
@@ -555,7 +557,12 @@ func (m *Master) processGCBatch(deletedPaths []string) {
 				delete(m.chunks, chunkHandle)
 			}
 		}
-		delete(m.files, deletedPath)
+
+		// Delete file from B-tree namespace
+		err = m.namespace.DeleteFile(deletedPath)
+		if err != nil {
+			log.Printf("Warning: Could not delete file %s from namespace during GC: %v", deletedPath, err)
+		}
 
 		log.Printf("GC: Permanently deleted file %s and its %d chunks", deletedPath, len(chunksToDelete))
 	}

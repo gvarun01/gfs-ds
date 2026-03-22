@@ -12,11 +12,20 @@ import (
 	"google.golang.org/grpc"
 )
 
+// GFS paper Section 5.2: 64KB checksum blocks
+const CHECKSUM_BLOCK_SIZE = 64 * 1024 // 64KB blocks as per GFS paper
+
+type BlockChecksum struct {
+	BlockIndex uint32 `json:"block_index"` // Index of 64KB block within chunk
+	Checksum   uint32 `json:"checksum"`    // CRC32 checksum of this block
+}
+
 type ChunkMetadata struct {
-	Size         int64
-	LastModified time.Time
-	Checksum     uint32
-	Version      int32
+	Size           int64           `json:"size"`
+	LastModified   time.Time       `json:"last_modified"`
+	Checksum       uint32          `json:"checksum"`        // Legacy: full chunk checksum (will be deprecated)
+	BlockChecksums []BlockChecksum `json:"block_checksums"` // NEW: 64KB block-level checksums
+	Version        int32           `json:"version"`
 }
 
 type ChunkServer struct {

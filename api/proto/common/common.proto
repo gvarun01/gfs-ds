@@ -20,6 +20,7 @@ message Status {
         ERROR = 1;
         NOT_FOUND = 2;
         ALREADY_EXISTS = 3;
+        DATA_LOSS = 4;  // Added for chunk corruption detection
     }
     Code code = 1;
     string message = 2;

@@ -29,7 +29,7 @@ func (s *MasterServer) Stop() {
 func NewMaster(config *Config) *Master {
 	m := &Master{
 		Config:        config,
-		files:         make(map[string]*FileInfo),
+		namespace:     NewBTreeNamespace(),
 		chunks:        make(map[string]*ChunkInfo),
 		deletedChunks: make(map[string]bool),
 		servers:       make(map[string]*ServerInfo),
@@ -468,18 +468,18 @@ func (s *MasterServer) GetFileChunksInfo(ctx context.Context, req *client_pb.Get
 	}
 
 	s.Master.filesMu.RLock()
-	fileInfo, exists := s.Master.files[req.Filename]
-	if !exists {
-		s.Master.filesMu.RUnlock()
+	defer s.Master.filesMu.RUnlock()
+
+	// Use B-tree namespace to get file
+	fileInfo, err := s.Master.namespace.GetFile(req.Filename)
+	if err != nil {
 		return &client_pb.GetFileChunksInfoResponse{
 			Status: &common_pb.Status{
 				Code:    common_pb.Status_ERROR,
-				Message: ErrFileNotFound.Error(),
+				Message: err.Error(),
 			},
 		}, nil
 	}
-
-	s.Master.filesMu.RUnlock()
 
 	fileInfo.mu.RLock()
 	defer fileInfo.mu.RUnlock()
@@ -601,18 +601,18 @@ func (s *MasterServer) GetLastChunkIndexInFile(ctx context.Context, req *client_
 	}
 
 	s.Master.filesMu.RLock()
-	fileInfo, exists := s.Master.files[req.Filename]
-	if !exists {
-		s.Master.filesMu.RUnlock()
+	defer s.Master.filesMu.RUnlock()
+
+	// Use B-tree namespace to get file
+	fileInfo, err := s.Master.namespace.GetFile(req.Filename)
+	if err != nil {
 		return &client_pb.GetLastChunkIndexInFileResponse{
 			Status: &common_pb.Status{
 				Code:    common_pb.Status_ERROR,
-				Message: ErrFileNotFound.Error(),
+				Message: err.Error(),
 			},
 		}, nil
 	}
-
-	s.Master.filesMu.RUnlock()
 
 	fileInfo.mu.RLock()
 	defer fileInfo.mu.RUnlock()
@@ -668,22 +668,21 @@ func (s *MasterServer) CreateFile(ctx context.Context, req *client_pb.CreateFile
 	s.Master.filesMu.Lock()
 	defer s.Master.filesMu.Unlock()
 
-	// Check if file already exists
-	if _, exists := s.Master.files[req.Filename]; exists {
-		return &client_pb.CreateFileResponse{
-			Status: &common_pb.Status{
-				Code:    common_pb.Status_ERROR,
-				Message: ErrFileExists.Error(),
-			},
-		}, nil
-	}
-
 	// Create new file entry
 	fileInfo := &FileInfo{
 		Chunks: make(map[int64]string),
 	}
 
-	s.Master.files[req.Filename] = fileInfo
+	// Use B-tree namespace to create file
+	err := s.Master.namespace.CreateFile(req.Filename, fileInfo)
+	if err != nil {
+		return &client_pb.CreateFileResponse{
+			Status: &common_pb.Status{
+				Code:    common_pb.Status_ERROR,
+				Message: err.Error(),
+			},
+		}, nil
+	}
 
 	if err := s.Master.opLog.LogOperation(OpCreateFile, req.Filename, "", fileInfo); err != nil {
 		log.Printf("Failed to log file creation: %v", err)
@@ -716,26 +715,16 @@ func (s *MasterServer) RenameFile(ctx context.Context, req *client_pb.RenameFile
 	s.Master.filesMu.Lock()
 	defer s.Master.filesMu.Unlock()
 
-	if _, exists := s.Master.files[req.NewFilename]; exists {
+	// Use B-tree namespace to rename file
+	err := s.Master.namespace.RenameFile(req.OldFilename, req.NewFilename)
+	if err != nil {
 		return &client_pb.RenameFileResponse{
 			Status: &common_pb.Status{
 				Code:    common_pb.Status_ERROR,
-				Message: ErrFileExists.Error(),
+				Message: err.Error(),
 			},
 		}, nil
 	}
-
-	if _, exists := s.Master.files[req.OldFilename]; !exists {
-		return &client_pb.RenameFileResponse{
-			Status: &common_pb.Status{
-				Code:    common_pb.Status_ERROR,
-				Message: ErrFileNotFound.Error(),
-			},
-		}, nil
-	}
-
-	s.Master.files[req.NewFilename] = s.Master.files[req.OldFilename]
-	delete(s.Master.files, req.OldFilename)
 
 	if err := s.Master.opLog.LogOperation(OpRenameFile, req.OldFilename, "", map[string]string{"new_filename": req.NewFilename}); err != nil {
 		log.Printf("Failed to log file rename: %v", err)
@@ -763,8 +752,8 @@ func (s *MasterServer) DeleteFile(ctx context.Context, req *client_pb.DeleteFile
 	s.Master.filesMu.Lock()
 	defer s.Master.filesMu.Unlock()
 
-	_, exists := s.Master.files[req.Filename]
-	if !exists {
+	// Check if file exists using B-tree namespace
+	if !s.Master.namespace.FileExists(req.Filename) {
 		return &client_pb.DeleteFileResponse{
 			Status: &common_pb.Status{
 				Code:    common_pb.Status_ERROR,
@@ -777,8 +766,16 @@ func (s *MasterServer) DeleteFile(ctx context.Context, req *client_pb.DeleteFile
 	trashPath := fmt.Sprintf("%s_%s", req.Filename, now)
 	trashPath = fmt.Sprintf("%s%s", s.Master.Config.Deletion.TrashDirPrefix, trashPath)
 
-	s.Master.files[trashPath] = s.Master.files[req.Filename]
-	delete(s.Master.files, req.Filename)
+	// Move file to trash (soft delete) using B-tree namespace
+	err := s.Master.namespace.RenameFile(req.Filename, trashPath)
+	if err != nil {
+		return &client_pb.DeleteFileResponse{
+			Status: &common_pb.Status{
+				Code:    common_pb.Status_ERROR,
+				Message: err.Error(),
+			},
+		}, nil
+	}
 
 	log.Printf("Soft deleted file %s (moved to %s)", req.Filename, trashPath)
 

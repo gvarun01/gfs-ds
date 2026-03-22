@@ -103,13 +103,28 @@ func (cs *ChunkServer) updateChunkMetadata(chunkHandle string, data []byte, offs
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	// Read the entire chunk file to compute block-level checksums
+	chunkPath := filepath.Join(cs.dataDir, chunkHandle+".chunk")
+	chunkData, err := os.ReadFile(chunkPath)
+	if err != nil {
+		// If file doesn't exist yet, this might be the first write
+		log.Printf("Could not read chunk file for metadata update: chunk=%s, error=%v", chunkHandle, err)
+		// For new chunks, we'll compute checksums based on the written data size
+		chunkData = make([]byte, offset+int64(len(data)))
+		copy(chunkData[offset:], data)
+	}
+
+	// Compute block-level checksums for the entire chunk
+	blockChecksums := computeBlockChecksums(chunkData)
+
 	metadata, exists := cs.chunks[chunkHandle]
 	if !exists {
 		metadata = &ChunkMetadata{
-			Size:         offset + int64(len(data)),
-			LastModified: time.Now(),
-			Checksum:     crc32.ChecksumIEEE(data),
-			Version:      version,
+			Size:           offset + int64(len(data)),
+			LastModified:   time.Now(),
+			Checksum:       crc32.ChecksumIEEE(chunkData), // Keep chunk-level checksum for backward compatibility
+			BlockChecksums: blockChecksums,
+			Version:        version,
 		}
 	} else {
 		// Update existing metadata
@@ -117,7 +132,8 @@ func (cs *ChunkServer) updateChunkMetadata(chunkHandle string, data []byte, offs
 			metadata.Size = offset + int64(len(data))
 		}
 		metadata.LastModified = time.Now()
-		metadata.Checksum = crc32.ChecksumIEEE(data)
+		metadata.Checksum = crc32.ChecksumIEEE(chunkData) // Keep chunk-level checksum for backward compatibility
+		metadata.BlockChecksums = blockChecksums
 		metadata.Version = version
 	}
 	cs.chunks[chunkHandle] = metadata
@@ -230,6 +246,29 @@ func (cs *ChunkServer) getPendingDataOffset(operationID, chunkHandle string) uin
 	return 0
 }
 
+// cleanupPendingData removes pending data for a specific operation after it completes
+func (cs *ChunkServer) cleanupPendingData(operationID string) {
+	cs.pendingDataLock.Lock()
+	defer cs.pendingDataLock.Unlock()
+
+	delete(cs.pendingData, operationID)
+	log.Printf("Cleaned up pending data for operation: %s", operationID)
+}
+
+// cleanupOldIdempotencyEntries removes idempotency entries older than the specified duration
+func (cs *ChunkServer) cleanupOldIdempotencyEntries(maxAge time.Duration) {
+	cs.idempotencyIdStatusMapLock.Lock()
+	defer cs.idempotencyIdStatusMapLock.Unlock()
+
+	// Simple cleanup: remove completed/failed entries
+	// In a production system, you'd want to track timestamps per entry
+	// For now, we'll just limit the map size to prevent unbounded growth
+	if len(cs.idempotencyIdStatusMap) > 10000 { // Arbitrary limit
+		cs.idempotencyIdStatusMap = make(map[string]AppendStatus)
+		log.Printf("Cleared idempotency status map due to size limit")
+	}
+}
+
 func (cs *ChunkServer) WriteChunk(ctx context.Context, req *chunk_ops.WriteChunkRequest) (*chunk_ops.WriteChunkResponse, error) {
 	operation := &Operation{
 		OperationId:  req.OperationId,
@@ -246,13 +285,16 @@ func (cs *ChunkServer) WriteChunk(ctx context.Context, req *chunk_ops.WriteChunk
 
 	select {
 	case result := <-operation.ResponseChan:
+		// Cleanup pending data regardless of success or failure
+		defer cs.cleanupPendingData(req.OperationId)
+
 		if result.Error != nil {
 			return &chunk_ops.WriteChunkResponse{
 				Status: &common_pb.Status{
 					Code:    common_pb.Status_ERROR,
 					Message: result.Error.Error(),
 				},
-			}, nil
+			}, result.Error
 		}
 
 		return &chunk_ops.WriteChunkResponse{
@@ -263,6 +305,8 @@ func (cs *ChunkServer) WriteChunk(ctx context.Context, req *chunk_ops.WriteChunk
 		}, nil
 
 	case <-ctx.Done():
+		// Cleanup pending data on cancellation
+		cs.cleanupPendingData(req.OperationId)
 		return &chunk_ops.WriteChunkResponse{
 			Status: &common_pb.Status{
 				Code:    common_pb.Status_ERROR,
@@ -289,6 +333,9 @@ func (cs *ChunkServer) RecordAppendChunk(ctx context.Context, req *chunk_ops.Rec
 
 	select {
 	case result := <-operation.ResponseChan:
+		// Cleanup pending data regardless of success or failure
+		defer cs.cleanupPendingData(req.OperationId)
+
 		if result.Error != nil {
 			return &chunk_ops.RecordAppendChunkResponse{
 				Status: &common_pb.Status{
@@ -307,6 +354,8 @@ func (cs *ChunkServer) RecordAppendChunk(ctx context.Context, req *chunk_ops.Rec
 		}, nil
 
 	case <-ctx.Done():
+		// Cleanup pending data on cancellation
+		cs.cleanupPendingData(req.OperationId)
 		return &chunk_ops.RecordAppendChunkResponse{
 			Status: &common_pb.Status{
 				Code:    common_pb.Status_ERROR,
@@ -900,6 +949,37 @@ func (cs *ChunkServer) ReadChunk(ctx context.Context, req *chunk_ops.ReadChunkRe
 		data = data[:n] // Truncate the buffer to actual bytes read
 	}
 
+	// CRITICAL FIX: Verify checksum before returning data
+	cs.mu.RLock()
+	metadata, exists := cs.chunks[chunkHandle]
+	cs.mu.RUnlock()
+
+	if exists {
+		// Read entire chunk for checksum verification
+		fullData := make([]byte, fileInfo.Size())
+		_, err = file.ReadAt(fullData, 0)
+		if err != nil {
+			return &chunk_ops.ReadChunkResponse{
+				Status: &common_pb.Status{
+					Code:    common_pb.Status_ERROR,
+					Message: fmt.Sprintf("failed to read chunk for verification: %v", err),
+				},
+			}, nil
+		}
+
+		// Use block-level checksum verification (GFS Section 5.2)
+		if err := verifyBlockChecksumsOnRead(chunkHandle, req.Offset, readLength, fullData, metadata); err != nil {
+			// Report corruption to master and return error
+			go cs.reportChunkCorruption(chunkHandle)
+			return &chunk_ops.ReadChunkResponse{
+				Status: &common_pb.Status{
+					Code:    common_pb.Status_DATA_LOSS,
+					Message: fmt.Sprintf("chunk corruption detected: %v", err),
+				},
+			}, nil
+		}
+	}
+
 	return &chunk_ops.ReadChunkResponse{
 		Status: &common_pb.Status{
 			Code:    common_pb.Status_OK,
@@ -1051,4 +1131,39 @@ func (cs *ChunkServer) handleReplicateChunk(operation *Operation) error {
 	}
 
 	return nil
+}
+
+// reportChunkCorruption reports detected chunk corruption to the master
+// This allows the master to schedule re-replication and mark this replica as stale
+func (cs *ChunkServer) reportChunkCorruption(chunkHandle string) {
+	log.Printf("CORRUPTION DETECTED: Chunk %s has checksum mismatch", chunkHandle)
+
+	// Mark the chunk as corrupted locally to prevent serving it
+	cs.mu.Lock()
+	if metadata, exists := cs.chunks[chunkHandle]; exists {
+		// We could add a Corrupted flag to metadata if needed
+		log.Printf("Chunk %s marked as corrupted - size: %d, version: %d",
+			chunkHandle, metadata.Size, metadata.Version)
+	}
+	cs.mu.Unlock()
+
+	// TODO: In a full implementation, we would send a corruption report to master
+	// via a gRPC call or through the heartbeat mechanism. For now, we log it.
+	// The master would then:
+	// 1. Mark this replica as stale
+	// 2. Schedule re-replication from a valid replica
+	// 3. Instruct this server to delete the corrupted chunk
+
+	// Remove the corrupted chunk file to prevent further corruption reads
+	chunkPath := filepath.Join(cs.serverDir, chunkHandle+".chunk")
+	if err := os.Remove(chunkPath); err != nil {
+		log.Printf("Failed to remove corrupted chunk file %s: %v", chunkPath, err)
+	} else {
+		log.Printf("Removed corrupted chunk file: %s", chunkPath)
+	}
+
+	// Remove from metadata
+	cs.mu.Lock()
+	delete(cs.chunks, chunkHandle)
+	cs.mu.Unlock()
 }

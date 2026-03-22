@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -110,21 +111,31 @@ func (m *Master) replayOperationLog() error {
 		switch entry.Operation {
 		case OpCreateFile:
 			m.filesMu.Lock()
-			m.files[entry.Filename] = &FileInfo{
+			fileInfo := &FileInfo{
 				Chunks: make(map[int64]string),
+			}
+			err := m.namespace.CreateFile(entry.Filename, fileInfo)
+			if err != nil {
+				// Log error but continue replay
+				log.Printf("Warning: Could not replay create file %s: %v", entry.Filename, err)
 			}
 			m.filesMu.Unlock()
 
 		case OpDeleteFile:
 			m.filesMu.Lock()
-			delete(m.files, entry.Filename)
+			err := m.namespace.DeleteFile(entry.Filename)
+			if err != nil {
+				// Log error but continue replay
+				log.Printf("Warning: Could not replay delete file %s: %v", entry.Filename, err)
+			}
 			m.filesMu.Unlock()
 
 		case OpRenameFile:
 			m.filesMu.Lock()
-			if fileInfo, exists := m.files[entry.Filename]; exists {
-				m.files[entry.NewFilename] = fileInfo
-				delete(m.files, entry.Filename)
+			err := m.namespace.RenameFile(entry.Filename, entry.NewFilename)
+			if err != nil {
+				// Log error but continue replay
+				log.Printf("Warning: Could not replay rename file %s to %s: %v", entry.Filename, entry.NewFilename, err)
 			}
 			m.filesMu.Unlock()
 
@@ -159,8 +170,11 @@ func (m *Master) replayOperationLog() error {
 
 			// Update file's chunk mapping
 			m.filesMu.Lock()
-			if fileInfo, exists := m.files[entry.Filename]; exists {
+			fileInfo, err := m.namespace.GetFile(entry.Filename)
+			if err == nil {
 				fileInfo.Chunks[fileIndex] = entry.ChunkHandle
+			} else {
+				log.Printf("Warning: Could not find file %s for chunk mapping during replay: %v", entry.Filename, err)
 			}
 			m.filesMu.Unlock()
 

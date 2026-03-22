@@ -89,6 +89,7 @@ func (cs *ChunkServer) Start() error {
 	go cs.startHeartbeat()
 	go cs.startLeaseRequester()
 	go cs.processOperations()
+	go cs.startCleanupRoutine()
 
 	return nil
 }
@@ -590,6 +591,24 @@ func (cs *ChunkServer) processOperations() {
 
 		default:
 			log.Println("Unknown operation type:", operation.Type)
+		}
+	}
+}
+
+// startCleanupRoutine starts a background routine that periodically cleans up old entries
+// to prevent memory leaks in idempotencyIdStatusMap and other maps
+func (cs *ChunkServer) startCleanupRoutine() {
+	ticker := time.NewTicker(5 * time.Minute) // Run cleanup every 5 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Clean up old idempotency entries to prevent memory leaks
+			cs.cleanupOldIdempotencyEntries(30 * time.Minute)
+		case <-cs.heartbeatStop:
+			// Stop cleanup when server is stopping
+			return
 		}
 	}
 }

@@ -41,9 +41,9 @@ type ServerInfo struct {
 type Master struct {
 	Config *Config
 
-	// File namespace
-	files   map[string]*FileInfo
-	filesMu sync.RWMutex
+	// File namespace - B-tree implementation for hierarchical directories
+	namespace *BTreeNamespace
+	filesMu   sync.RWMutex
 
 	// Chunk management
 	chunks   map[string]*ChunkInfo // chunk_handle -> chunk info
