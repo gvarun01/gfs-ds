@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"time"
 
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/constants"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,6 +77,19 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("error parsing config file: %v", err)
 	}
 
+	if config.Connection.Master.Timeout <= 0 {
+		config.Connection.Master.Timeout = int(constants.DefaultTimeout.Seconds())
+	}
+	if config.Connection.MaxRetries <= 0 {
+		config.Connection.MaxRetries = constants.MaxRetryAttempts
+	}
+	if config.Cache.ChunkLocation.TTL <= 0 {
+		config.Cache.ChunkLocation.TTL = int(constants.HeartbeatInterval.Seconds())
+	}
+	if config.Operation.Timeouts.Write <= 0 {
+		config.Operation.Timeouts.Write = int(constants.DefaultTimeout.Seconds())
+	}
+
 	return config, nil
 }
 
@@ -87,7 +101,8 @@ func (c *Config) ToClientConfig() *ClientConfig {
 			Interval:    time.Duration(c.Connection.RetryInterval) * time.Millisecond,
 		},
 		Cache: CacheConfig{
-			ChunkTTL: time.Duration(c.Cache.ChunkLocation.TTL) * time.Second,
+			ChunkTTL:  time.Duration(c.Cache.ChunkLocation.TTL) * time.Second,
+			ChunkSize: constants.DefaultChunkSize,
 		},
 		Timeouts: TimeoutConfig{
 			Operation:  time.Duration(c.Operation.Timeouts.Write) * time.Second,

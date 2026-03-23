@@ -2,8 +2,9 @@ package master
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/constants"
 	"gopkg.in/yaml.v3"
 )
 
@@ -64,7 +65,7 @@ type Config struct {
 }
 
 func LoadConfig(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("error reading config file: %v", err)
 	}
@@ -72,6 +73,16 @@ func LoadConfig(path string) (*Config, error) {
 	config := &Config{}
 	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("error parsing config file: %v", err)
+	}
+
+	if config.Chunk.Size <= 0 {
+		config.Chunk.Size = constants.DefaultChunkSize
+	}
+	if config.Replication.Factor <= 0 {
+		config.Replication.Factor = constants.DefaultReplicationFactor
+	}
+	if config.Lease.LeaseTimeout <= 0 {
+		config.Lease.LeaseTimeout = int(constants.LeaseTimeout.Seconds())
 	}
 
 	return config, nil

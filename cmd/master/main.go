@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -8,11 +9,27 @@ import (
 	"syscall"
 
 	"github.com/Mit-Vin/GFS-Distributed-Systems/internal/master"
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/configpath"
 )
 
 func main() {
+	configFlag := flag.String("config", "", "path to master configuration file")
+	flag.Parse()
+
+	configPath, err := configpath.Resolve(
+		*configFlag,
+		"GFS_MASTER_CONFIG",
+		[]string{
+			"configs/general-config.yml",
+			"../../configs/general-config.yml",
+		},
+	)
+	if err != nil {
+		log.Fatalf("Failed to resolve master configuration file: %v", err)
+	}
+
 	// Load server configuration
-	config, err := master.LoadConfig("../../configs/general-config.yml")
+	config, err := master.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration file: %v", err)
 	}

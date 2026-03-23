@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Mit-Vin/GFS-Distributed-Systems/internal/client"
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/configpath"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +35,7 @@ func main() {
 		},
 	}
 
-	rootCmd.PersistentFlags().String("config", "../../configs/client-config.yml", "path to client configuration file")
+	rootCmd.PersistentFlags().String("config", "", "path to client configuration file")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -43,12 +44,21 @@ func main() {
 }
 
 func setupClient(cmd *cobra.Command) {
-	configPath, err := cmd.Flags().GetString("config")
+	configFlag, err := cmd.Flags().GetString("config")
 	if err != nil {
 		log.Fatalf("Failed to get config flag: %v", err)
 	}
-	if configPath == "" {
-		log.Fatal("Configuration path cannot be empty")
+
+	configPath, err := configpath.Resolve(
+		configFlag,
+		"GFS_CLIENT_CONFIG",
+		[]string{
+			"configs/client-config.yml",
+			"../../configs/client-config.yml",
+		},
+	)
+	if err != nil {
+		log.Fatalf("Failed to resolve client configuration file: %v", err)
 	}
 
 	gfsClient, err = client.NewClient(configPath)
