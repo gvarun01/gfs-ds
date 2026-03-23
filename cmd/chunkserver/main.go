@@ -7,11 +7,13 @@ import (
 	"net"
 
 	"github.com/Mit-Vin/GFS-Distributed-Systems/internal/chunkserver"
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/configpath"
 )
 
 func main() {
 	// Parse command-line arguments
-	port := flag.Int("port", 8080, "Port number to run the chunk server on")
+	port := flag.Int("port", 8001, "Port number to run the chunk server on")
+	configFlag := flag.String("config", "", "Path to chunkserver configuration file")
 	flag.Parse()
 
 	// Validate the provided port number
@@ -24,8 +26,20 @@ func main() {
 	address := fmt.Sprintf("localhost:%d", *port)
 	log.Printf("Initializing chunk server with ID: %s at address: %s\n", serverID, address)
 
+	configPath, err := configpath.Resolve(
+		*configFlag,
+		"GFS_CHUNKSERVER_CONFIG",
+		[]string{
+			"configs/chunkserver-config.yml",
+			"../../configs/chunkserver-config.yml",
+		},
+	)
+	if err != nil {
+		log.Fatalf("Failed to resolve chunkserver configuration file: %v\n", err)
+	}
+
 	// Load server configuration
-	config, err := chunkserver.LoadConfig("../../configs/chunkserver-config.yml")
+	config, err := chunkserver.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration file: %v\n", err)
 	}

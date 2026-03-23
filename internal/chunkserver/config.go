@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/constants"
 	"gopkg.in/yaml.v2"
 )
 
@@ -39,6 +40,19 @@ func LoadConfig(path string) (*Config, error) {
 	config := &Config{}
 	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("error parsing config file: %v", err)
+	}
+
+	if config.Storage.MaxChunkSize <= 0 {
+		config.Storage.MaxChunkSize = constants.MaxChunkSize
+	}
+	if config.Server.HeartbeatInterval <= 0 {
+		config.Server.HeartbeatInterval = int(constants.HeartbeatInterval.Seconds())
+	}
+	if config.Server.LeaseTimeout <= 0 {
+		config.Server.LeaseTimeout = int(constants.LeaseTimeout.Seconds())
+	}
+	if config.Operation.RetryAttempts <= 0 {
+		config.Operation.RetryAttempts = constants.MaxRetryAttempts
 	}
 
 	return config, nil

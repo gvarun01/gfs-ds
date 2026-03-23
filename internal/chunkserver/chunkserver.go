@@ -15,6 +15,7 @@ import (
 	chunk_pb "github.com/Mit-Vin/GFS-Distributed-Systems/api/proto/chunk_master"
 	chunk_ops "github.com/Mit-Vin/GFS-Distributed-Systems/api/proto/chunk_operations"
 	common_pb "github.com/Mit-Vin/GFS-Distributed-Systems/api/proto/common"
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/constants"
 	"google.golang.org/grpc"
 )
 
@@ -66,7 +67,7 @@ func NewChunkServer(serverID, address string, config *Config) (*ChunkServer, err
 		log.Printf("Warning: Failed to recover metadata: %v", err)
 	}
 
-	cs.StartMetadataCheckpointing(5 * time.Second)
+	cs.StartMetadataCheckpointing(constants.MetadataCheckpointInterval)
 
 	return cs, nil
 }

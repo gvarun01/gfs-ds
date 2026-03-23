@@ -1,6 +1,6 @@
 ---
   chunk:
-    size: 1048576
+    size: 67108864
     
     naming_pattern: "chunk_{id}"
 
@@ -13,7 +13,7 @@
   
     # Directory to store chunk data
     # Ensure this directory has sufficient permissions and storage
-    storage_path: "../../storage/chunks"
+    storage_path: "storage/chunks"
 
   deletion:
     g_c_interval: 180
@@ -35,7 +35,7 @@
   metadata:
     database:
       type: "json"  # or "mysql", "postgresql"
-      path: "../../storage/master/metadata.json"
+      path: "storage/master/metadata.json"
       backup_interval: 30
     
     # Namespace settings
@@ -48,7 +48,7 @@
     lease_timeout: 60
 
   operation_log:
-    path: "../../storage/master/operation-log.json"
+    path: "storage/master/operation-log.json"
 
   replication:
     # Number of replicas for each chunk

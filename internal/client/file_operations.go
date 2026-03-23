@@ -7,12 +7,18 @@ import (
 
 	chunk_ops "github.com/Mit-Vin/GFS-Distributed-Systems/api/proto/chunk_operations"
 	common_pb "github.com/Mit-Vin/GFS-Distributed-Systems/api/proto/common"
+	"github.com/Mit-Vin/GFS-Distributed-Systems/pkg/constants"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 )
 
-const ChunkSize = 1 * 1024 * 1024 // 1MB
+func (c *Client) chunkSize() int64 {
+	if c != nil && c.config != nil && c.config.Cache.ChunkSize > 0 {
+		return c.config.Cache.ChunkSize
+	}
+	return constants.DefaultChunkSize
+}
 
 func (c *Client) PushDataToPrimary(ctx context.Context, chunkHandle string, data []byte) (string, error) {
 	// Get chunk information from cache
@@ -66,8 +72,10 @@ func (c *Client) Read(ctx context.Context, filename string, offset int64, length
 		return nil, fmt.Errorf("invalid read length: %d", length)
 	}
 
-	startChunk := offset / ChunkSize
-	endChunk := (offset + length - 1) / ChunkSize
+	chunkSize := c.chunkSize()
+
+	startChunk := offset / chunkSize
+	endChunk := (offset + length - 1) / chunkSize
 
 	chunks, err := c.GetChunkInfo(ctx, filename, startChunk, endChunk)
 	if err != nil {
@@ -84,9 +92,9 @@ func (c *Client) Read(ctx context.Context, filename string, offset int64, length
 			return nil, fmt.Errorf("chunk info missing for index %d", i)
 		}
 
-		chunkOffset := currentOffset % ChunkSize
+		chunkOffset := currentOffset % chunkSize
 
-		bytesToRead := ChunkSize - chunkOffset
+		bytesToRead := chunkSize - chunkOffset
 		if bytesToRead > remainingLength {
 			bytesToRead = remainingLength
 		}
@@ -140,9 +148,11 @@ func (c *Client) Read(ctx context.Context, filename string, offset int64, length
 }
 
 func (c *Client) Write(ctx context.Context, filename string, offset int64, data []byte) (int, error) {
+	chunkSize := c.chunkSize()
+
 	// Get chunk information from the master
-	startChunk := offset / ChunkSize
-	endChunk := (offset + int64(len(data))) / ChunkSize
+	startChunk := offset / chunkSize
+	endChunk := (offset + int64(len(data))) / chunkSize
 	chunks, err := c.GetChunkInfo(ctx, filename, startChunk, endChunk)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get chunk info: %v", err)
@@ -160,10 +170,10 @@ func (c *Client) Write(ctx context.Context, filename string, offset int64, data 
 		}
 
 		// Calculate the offset within this chunk
-		chunkOffset := currentOffset % ChunkSize
+		chunkOffset := currentOffset % chunkSize
 
 		var chunkData []byte
-		bytesRemaining := ChunkSize - chunkOffset
+		bytesRemaining := chunkSize - chunkOffset
 		if int64(len(remainingData)) > bytesRemaining {
 			chunkData = remainingData[:bytesRemaining]
 			remainingData = remainingData[bytesRemaining:]
@@ -215,8 +225,10 @@ func (c *Client) Write(ctx context.Context, filename string, offset int64, data 
 }
 
 func (c *Client) Append(ctx context.Context, filename string, data []byte) (int64, string, error) {
-	if int64(len(data)) >= ChunkSize/4 {
-		return -1, "", fmt.Errorf("data (size: %v) should be less than 1/4th of chunkSize (%v)", int64(len(data)), ChunkSize)
+	chunkSize := c.chunkSize()
+
+	if int64(len(data)) >= chunkSize/4 {
+		return -1, "", fmt.Errorf("data (size: %v) should be less than 1/4th of chunkSize (%v)", int64(len(data)), chunkSize)
 	}
 
 	chunkInfo, chunkIdx, err := c.GetLastChunkInfo(ctx, filename)
@@ -258,7 +270,7 @@ func (c *Client) Append(ctx context.Context, filename string, data []byte) (int6
 		return -1, "", fmt.Errorf("write chunk failed: %s", appendResp.Status.Message)
 	}
 
-	return appendResp.OffsetInChunk + ChunkSize*chunkIdx, idempID, nil
+	return appendResp.OffsetInChunk + chunkSize*chunkIdx, idempID, nil
 }
 
 // Supporting types for write operations

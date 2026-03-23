@@ -21,7 +21,8 @@ type RetryConfig struct {
 }
 
 type CacheConfig struct {
-	ChunkTTL time.Duration `yaml:"chunk_ttl"`
+	ChunkTTL  time.Duration `yaml:"chunk_ttl"`
+	ChunkSize int64         `yaml:"chunk_size"`
 }
 
 type TimeoutConfig struct {
