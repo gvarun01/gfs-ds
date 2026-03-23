@@ -11,6 +11,7 @@ service ClientMasterService {
     rpc GetLastChunkIndexInFile(GetLastChunkIndexInFileRequest) returns (GetLastChunkIndexInFileResponse) {}
     rpc CreateFile(CreateFileRequest) returns (CreateFileResponse) {}
     rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse) {}
+    rpc UndeleteFile(UndeleteFileRequest) returns (UndeleteFileResponse) {}
     rpc RenameFile(RenameFileRequest) returns (RenameFileResponse) {}
 }
 
@@ -59,6 +60,16 @@ message DeleteFileRequest {
 
 message DeleteFileResponse {
     common.Status status = 1;
+}
+
+message UndeleteFileRequest {
+    string trash_filename = 1;  // Filename in trash directory
+    string restore_filename = 2; // Where to restore the file (optional, defaults to original)
+}
+
+message UndeleteFileResponse {
+    common.Status status = 1;
+    string restored_path = 2;  // Actual path where file was restored
 }
 
 message RenameFileRequest {

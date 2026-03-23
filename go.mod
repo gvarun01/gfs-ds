@@ -3,6 +3,11 @@ module github.com/Mit-Vin/GFS-Distributed-Systems
 go 1.24.0
 
 require (
+	github.com/aws/aws-sdk-go-v2 v1.26.1
+	github.com/aws/aws-sdk-go-v2/config v1.27.11
+	github.com/aws/aws-sdk-go-v2/credentials v1.17.11
+	github.com/aws/aws-sdk-go-v2/service/route53 v1.40.5
+	github.com/cloudflare/cloudflare-go v0.97.0
 	github.com/fatih/color v1.18.0
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.8.1

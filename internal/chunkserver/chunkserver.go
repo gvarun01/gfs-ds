@@ -564,7 +564,8 @@ func (cs *ChunkServer) handleBecomePrimary(cmd *chunk_pb.ChunkCommand) error {
 func (cs *ChunkServer) startLeaseRequester() {
 	ticker := time.NewTicker(time.Duration(cs.config.Server.LeaseRequestInterval) * time.Second)
 
-	// TODO: Extend lease only in case you have an ongoing operation
+	// Note: Future optimization could extend leases only when operations are active
+	// Currently extending all primary leases to maintain availability
 	for range ticker.C {
 		cs.mu.RLock()
 		for handle, isPrimary := range cs.chunkPrimary {

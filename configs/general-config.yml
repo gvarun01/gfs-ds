@@ -17,7 +17,7 @@
 
   deletion:
     g_c_interval: 180
-    retention_period: 300
+    retention_period: 259200  # 3 days (72 hours) as per GFS paper Section 4.4
     g_c_delete_batch_size: 100
     trash_dir_prefix: "/.trash/"
 

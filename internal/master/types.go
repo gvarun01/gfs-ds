@@ -60,6 +60,31 @@ type ServerInfo struct {
 	mu             sync.RWMutex
 }
 
+// OrphanedChunk represents a chunk reported by chunkserver but unknown to master
+// These chunks need to be tracked and eventually deleted to prevent storage waste
+type OrphanedChunk struct {
+	ChunkHandle   string    // Handle of the orphaned chunk
+	ServerID      string    // ID of the server reporting the chunk
+	DetectedAt    time.Time // When the orphan was first detected
+	LastSeen      time.Time // Last time this orphan was reported
+	Size         int64     // Size of the orphaned chunk
+	ConfirmCount  int32     // Number of times this orphan has been confirmed
+	Version      int32     // Version reported by chunkserver
+	mu           sync.RWMutex
+}
+
+// ExpeditedDeletion represents a file that was deleted twice and should be immediately removed
+// This implements the GFS paper Section 4.4 expedited deletion for double-deleted files
+type ExpeditedDeletion struct {
+	TrashPath      string    // Path of the file in trash
+	OriginalPath   string    // Original path before first deletion
+	FirstDeletedAt time.Time // When the file was first deleted
+	SecondDeletedAt time.Time // When the file was deleted again
+	ProcessedAt    time.Time // When the expedited deletion was processed
+	IsProcessed    bool      // Whether this has been processed
+	mu            sync.RWMutex
+}
+
 type Master struct {
 	Config *Config
 
@@ -73,6 +98,14 @@ type Master struct {
 
 	deletedChunks   map[string]bool
 	deletedChunksMu sync.RWMutex
+
+	// Orphaned chunk tracking for proper GFS garbage collection
+	orphanedChunks   map[string]*OrphanedChunk // chunk_handle -> orphan info
+	orphanedChunksMu sync.RWMutex
+
+	// Expedited deletion tracking for double-deleted files
+	expeditedDeletions   map[string]*ExpeditedDeletion // trash_path -> expedited deletion info
+	expeditedDeletionsMu sync.RWMutex
 
 	// Snapshot management
 	snapshots   map[string]*SnapshotInfo // snapshot_path -> snapshot info

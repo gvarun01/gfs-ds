@@ -1,0 +1,103 @@
+---
+# High Availability Cluster Configuration for GFS
+# This file demonstrates how to configure the master cluster with various DNS providers
+
+# Basic cluster settings
+cluster:
+  node_id: "master-01"               # Unique identifier for this master node
+  cluster_size: 3                    # Total number of masters (must be odd)
+  peer_addrs:                        # List of all master nodes including this one
+    - "master-01.example.com:9090"
+    - "master-02.example.com:9090" 
+    - "master-03.example.com:9090"
+  raft_port: 9090                    # gRPC port for Raft communication
+
+# Raft consensus configuration (recommended defaults)
+raft:
+  election_timeout_min: 150ms        # Minimum election timeout
+  election_timeout_max: 300ms        # Maximum election timeout  
+  heartbeat_interval: 50ms           # Leader heartbeat interval
+  snapshot_threshold: 1000           # Log entries before snapshot
+
+# Shadow master configuration
+shadows:
+  enable_shadows: true               # Enable read-only shadow masters
+  replication_timeout: 5s            # Timeout for log replication
+  readonly_port: 8081               # Port for read-only operations
+
+# Automatic failover configuration  
+failover:
+  enable_failover: true              # Enable automatic failover
+  health_check_interval: 1s          # Health monitoring frequency
+  failover_timeout: 30s              # Maximum failover completion time
+
+# DNS configuration - Choose one provider below
+
+# Option 1: Internal DNS Provider (for testing/local deployment)
+dns:
+  dns_enabled: true
+  dns_domain: "gfs-master.example.com"
+  dns_ttl: 30s
+  dns_provider: "internal"
+  # No additional config needed for internal provider
+
+# Option 2: AWS Route53 DNS Provider
+dns_route53_example:
+  dns_enabled: true
+  dns_domain: "gfs-master.example.com"  # Must be in your Route53 hosted zone
+  dns_ttl: 30s
+  dns_provider: "route53"
+  route53_config:
+    hosted_zone_id: "Z123456789ABCDEFGHIJ"  # Your Route53 hosted zone ID
+    aws_region: "us-east-1"                  # AWS region (optional, defaults to us-east-1)
+    use_iam_role: true                       # Use IAM instance role (recommended)
+    # aws_profile: "my-profile"              # AWS profile name (if not using default)
+    # access_key_id: "AKIA..."               # AWS access key (not recommended for production)
+    # secret_access_key: "..."               # AWS secret key (not recommended for production)
+
+# Option 3: Cloudflare DNS Provider  
+dns_cloudflare_example:
+  dns_enabled: true
+  dns_domain: "gfs-master.example.com"  # Must be in your Cloudflare zone
+  dns_ttl: 30s
+  dns_provider: "cloudflare"
+  cloudflare_config:
+    zone_id: "abcdef123456789..."            # Your Cloudflare zone ID
+    use_api_token: true                      # Use API token (recommended)
+    api_token: "your-api-token-here"         # Cloudflare API token
+    # api_key: "your-global-api-key"         # Alternative: Global API key (legacy)
+    # email: "your-email@example.com"        # Required with API key
+
+---
+# Usage Instructions:
+#
+# 1. Copy this file and customize for your environment
+# 2. Choose ONE DNS configuration section (internal, route53, or cloudflare)
+# 3. Update the cluster settings with your actual server addresses
+# 4. For Route53: Create IAM role with Route53 permissions or use access keys
+# 5. For Cloudflare: Create API token with Zone:Edit permissions
+# 6. Start each master with: ./gfs-master --config=your-config.yml
+
+# Required IAM permissions for Route53:
+# {
+#   "Version": "2012-10-17",
+#   "Statement": [
+#     {
+#       "Effect": "Allow",
+#       "Action": [
+#         "route53:GetHostedZone",
+#         "route53:ListResourceRecordSets", 
+#         "route53:ChangeResourceRecordSets",
+#         "route53:GetChange"
+#       ],
+#       "Resource": [
+#         "arn:aws:route53:::hostedzone/Z123456789ABCDEFGHIJ",
+#         "arn:aws:route53:::change/*"
+#       ]
+#     }
+#   ]
+# }
+
+# Required Cloudflare API token permissions:
+# - Zone:Edit for the specific zone
+# - Zone:Read for zone details

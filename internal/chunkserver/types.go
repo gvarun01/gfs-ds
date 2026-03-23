@@ -99,7 +99,8 @@ const (
 
 type AppendStatus int
 
-// [TODO] Make different phases completion messages (future work)
+// AppendStatus represents the current state of an append operation
+// Note: Enhanced status reporting could be implemented for detailed operation tracking
 const (
 	AppendReceived AppendStatus = iota
 	AppendCompleted

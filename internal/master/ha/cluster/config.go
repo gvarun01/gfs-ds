@@ -34,6 +34,31 @@ type ClusterConfig struct {
 	DNSDomain          string        `yaml:"dns_domain"`           // DNS domain for master discovery
 	DNSTTL             time.Duration `yaml:"dns_ttl"`              // DNS record TTL
 	DNSProvider        string        `yaml:"dns_provider"`         // DNS provider (route53, cloudflare, internal)
+	
+	// Route53 specific settings
+	Route53Config      *Route53Config `yaml:"route53_config,omitempty"` // Route53 configuration
+	
+	// Cloudflare specific settings
+	CloudflareConfig   *CloudflareConfig `yaml:"cloudflare_config,omitempty"` // Cloudflare configuration
+}
+
+// Route53Config contains AWS Route53 specific configuration
+type Route53Config struct {
+	HostedZoneID     string `yaml:"hosted_zone_id"`     // AWS Route53 Hosted Zone ID
+	AWSRegion        string `yaml:"aws_region"`         // AWS Region (defaults to us-east-1)
+	AWSProfile       string `yaml:"aws_profile"`        // AWS Profile for credentials
+	AccessKeyID      string `yaml:"access_key_id"`      // AWS Access Key ID (optional, prefer IAM roles)
+	SecretAccessKey  string `yaml:"secret_access_key"`  // AWS Secret Access Key (optional, prefer IAM roles)
+	UseIAMRole       bool   `yaml:"use_iam_role"`       // Use IAM instance role for authentication
+}
+
+// CloudflareConfig contains Cloudflare specific configuration  
+type CloudflareConfig struct {
+	APIToken     string `yaml:"api_token"`     // Cloudflare API Token (preferred)
+	APIKey       string `yaml:"api_key"`       // Cloudflare Global API Key (legacy)
+	Email        string `yaml:"email"`         // Cloudflare account email (required with API Key)
+	ZoneID       string `yaml:"zone_id"`       // Cloudflare Zone ID
+	UseAPIToken  bool   `yaml:"use_api_token"` // Whether to use API Token vs API Key+Email
 }
 
 // DefaultClusterConfig returns a default cluster configuration

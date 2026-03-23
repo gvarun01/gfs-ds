@@ -130,16 +130,28 @@ func (s *MasterServer) updateServerStatus(serverId string, req *chunk_pb.HeartBe
 			continue
 		}
 		s.Master.deletedChunksMu.Unlock()
-		if _, exists := s.Master.chunks[chunkHandle]; !exists {
-			s.Master.chunks[chunkHandle] = &ChunkInfo{
-				Size:      chunkStatus.Size,
-				Locations: make(map[string]bool),
-			}
+		
+		// Check if chunk exists in master's registry
+		s.Master.chunksMu.RLock()
+		chunkInfo, exists := s.Master.chunks[chunkHandle]
+		s.Master.chunksMu.RUnlock()
+		
+		if !exists {
+			// This is an orphaned chunk - mark it for tracking and eventual deletion
+			// Per GFS paper Section 4.4: chunks not known to master are garbage
+			s.Master.markChunkAsOrphan(chunkHandle, serverId, chunkStatus.Size, chunkStatus.Version)
+			continue // Don't adopt unknown chunks
 		}
 
-		chunkInfo := s.Master.chunks[chunkHandle]
+		// Update known chunk information
 		chunkInfo.mu.Lock()
 		chunkInfo.Size = chunkStatus.Size
+		if chunkInfo.Locations == nil {
+			chunkInfo.Locations = make(map[string]bool)
+		}
+		if chunkInfo.ServerAddresses == nil {
+			chunkInfo.ServerAddresses = make(map[string]string)
+		}
 		chunkInfo.Locations[serverId] = true
 		chunkInfo.ServerAddresses[serverId] = s.Master.servers[serverId].Address
 		chunkInfo.mu.Unlock()
@@ -437,7 +449,122 @@ func (s *MasterServer) generateChunkCommands(serverId string) []*chunk_pb.ChunkC
 					command.TargetLocations[i] = &common_pb.ChunkLocation{
 						ServerId:      target,
 						ServerAddress: s.Master.servers[target].Address,
-					}
+// processExpeditedDeletions processes files marked for expedited deletion
+// This method is called from the garbage collection cycle
+func (m *Master) processExpeditedDeletions() {
+	m.expeditedDeletionsMu.Lock()
+	filesToDelete := make([]*ExpeditedDeletion, 0)
+	
+	for _, deletion := range m.expeditedDeletions {
+		deletion.mu.RLock()
+		if !deletion.IsProcessed {
+			filesToDelete = append(filesToDelete, deletion)
+		}
+		deletion.mu.RUnlock()
+	}
+	m.expeditedDeletionsMu.Unlock()
+	
+	// Process deletions outside of lock to avoid deadlock
+	for _, deletion := range filesToDelete {
+		if err := m.performExpeditedDeletion(deletion); err != nil {
+			log.Printf("Failed to perform expedited deletion for %s: %v", deletion.TrashPath, err)
+		} else {
+			// Mark as processed
+			deletion.mu.Lock()
+			deletion.IsProcessed = true
+			deletion.ProcessedAt = time.Now()
+			deletion.mu.Unlock()
+			
+			log.Printf("Successfully performed expedited deletion of %s", deletion.TrashPath)
+		}
+	}
+	
+	// Clean up processed expedited deletions
+	m.cleanupProcessedExpeditedDeletions()
+}
+
+// performExpeditedDeletion immediately deletes a file and its chunks
+func (m *Master) performExpeditedDeletion(deletion *ExpeditedDeletion) error {
+	m.filesMu.Lock()
+	defer m.filesMu.Unlock()
+	
+	trashPath := deletion.TrashPath
+	
+	// Check if file still exists in trash
+	if !m.namespace.FileExists(trashPath) {
+		return fmt.Errorf("trash file %s no longer exists", trashPath)
+	}
+	
+	// Get file info to identify chunks for deletion
+	fileInfo := m.namespace.GetFileInfo(trashPath)
+	if fileInfo != nil {
+		// Delete all chunks associated with the file
+		for _, chunkHandle := range fileInfo.Chunks {
+			if err := m.deleteChunkAndReplicas(chunkHandle); err != nil {
+				log.Printf("Warning: Failed to delete chunk %s during expedited deletion: %v", 
+					chunkHandle, err)
+			}
+		}
+	}
+	
+	// Remove file from namespace
+	if err := m.namespace.DeleteFile(trashPath); err != nil {
+		return fmt.Errorf("failed to delete trash file %s: %v", trashPath, err)
+	}
+	
+	return nil
+}
+
+// deleteChunkAndReplicas deletes a chunk and all its replicas from chunkservers
+func (m *Master) deleteChunkAndReplicas(chunkHandle string) error {
+	m.chunksMu.Lock()
+	chunkInfo, exists := m.chunks[chunkHandle]
+	if !exists {
+		m.chunksMu.Unlock()
+		return nil // Chunk already deleted
+	}
+	
+	// Get list of servers that have this chunk
+	var servers []string
+	chunkInfo.mu.RLock()
+	for serverID := range chunkInfo.Locations {
+		servers = append(servers, serverID)
+	}
+	chunkInfo.mu.RUnlock()
+	
+	// Remove chunk from master's registry
+	delete(m.chunks, chunkHandle)
+	m.chunksMu.Unlock()
+	
+	// Mark chunk for deletion
+	m.deletedChunksMu.Lock()
+	m.deletedChunks[chunkHandle] = true
+	m.deletedChunksMu.Unlock()
+	
+	// Send delete commands to all servers
+	for _, serverID := range servers {
+		if err := m.sendDeleteChunkCommand(serverID, chunkHandle); err != nil {
+			log.Printf("Failed to send delete command for chunk %s to server %s: %v", 
+				chunkHandle, serverID, err)
+		}
+	}
+	
+	return nil
+}
+
+// cleanupProcessedExpeditedDeletions removes processed expedited deletion records
+func (m *Master) cleanupProcessedExpeditedDeletions() {
+	m.expeditedDeletionsMu.Lock()
+	defer m.expeditedDeletionsMu.Unlock()
+	
+	for trashPath, deletion := range m.expeditedDeletions {
+		deletion.mu.RLock()
+		if deletion.IsProcessed && time.Since(deletion.ProcessedAt) > time.Hour {
+			delete(m.expeditedDeletions, trashPath)
+		}
+		deletion.mu.RUnlock()
+	}
+}
 				}
 			}
 
@@ -471,6 +598,11 @@ func (m *Master) runGarbageCollection() {
 
 		log.Printf("Starting garbage collection cycle")
 
+		// First, process expedited deletions (double-deleted files)
+		// These should be processed immediately, bypassing grace period
+		log.Printf("Processing expedited deletions")
+		m.processExpeditedDeletions()
+
 		filesToProcess := m.getExpiredDeletedFiles()
 
 		// Process files in batches
@@ -483,6 +615,11 @@ func (m *Master) runGarbageCollection() {
 			batch := filesToProcess[i:end]
 			m.processGCBatch(batch)
 		}
+		
+		// Process orphaned chunks after file cleanup
+		// This implements GFS Section 4.4 orphaned chunk detection and cleanup
+		log.Printf("Processing orphaned chunks")
+		m.processOrphanedChunks()
 
 		m.gcMu.Lock()
 		m.gcInProgress = false
@@ -685,4 +822,112 @@ func (m *Master) validatePath(filepath string) bool {
 	}
 
 	return true
+}
+
+// markChunkAsOrphan tracks a chunk reported by chunkserver but unknown to master
+// This implements proper GFS garbage collection as per Section 4.4 of the GFS paper
+func (m *Master) markChunkAsOrphan(chunkHandle, serverID string, chunkSize int64, version int32) {
+	m.orphanedChunksMu.Lock()
+	defer m.orphanedChunksMu.Unlock()
+
+	now := time.Now()
+	
+	if orphan, exists := m.orphanedChunks[chunkHandle]; exists {
+		// Update existing orphan tracking
+		orphan.mu.Lock()
+		orphan.LastSeen = now
+		orphan.ConfirmCount++
+		orphan.Size = chunkSize
+		orphan.Version = version
+		orphan.mu.Unlock()
+		
+		log.Printf("Orphaned chunk %s confirmed again by server %s (count: %d)", 
+			chunkHandle, serverID, orphan.ConfirmCount)
+	} else {
+		// First time seeing this orphan
+		m.orphanedChunks[chunkHandle] = &OrphanedChunk{
+			ChunkHandle:   chunkHandle,
+			ServerID:      serverID,
+			DetectedAt:    now,
+			LastSeen:      now,
+			Size:         chunkSize,
+			ConfirmCount:  1,
+			Version:      version,
+		}
+		
+		log.Printf("New orphaned chunk detected: %s on server %s (size: %d bytes)", 
+			chunkHandle, serverID, chunkSize)
+	}
+}
+
+// processOrphanedChunks cleans up orphaned chunks that have been confirmed multiple times
+// This prevents storage waste and implements GFS garbage collection properly
+func (m *Master) processOrphanedChunks() {
+	m.orphanedChunksMu.Lock()
+	orphansToDelete := make([]*OrphanedChunk, 0)
+	
+	// Identify orphans ready for deletion (confirmed multiple times)
+	confirmationThreshold := int32(3) // Require 3 confirmations before deletion
+	
+	for handle, orphan := range m.orphanedChunks {
+		orphan.mu.RLock()
+		if orphan.ConfirmCount >= confirmationThreshold {
+			orphansToDelete = append(orphansToDelete, orphan)
+		}
+		orphan.mu.RUnlock()
+	}
+	m.orphanedChunksMu.Unlock()
+
+	// Process deletions outside of lock to avoid deadlock
+	for _, orphan := range orphansToDelete {
+		if err := m.deleteOrphanedChunk(orphan); err != nil {
+			log.Printf("Failed to delete orphaned chunk %s: %v", orphan.ChunkHandle, err)
+		} else {
+			// Remove from tracking after successful deletion command
+			m.orphanedChunksMu.Lock()
+			delete(m.orphanedChunks, orphan.ChunkHandle)
+			m.orphanedChunksMu.Unlock()
+			
+			log.Printf("Successfully marked orphaned chunk %s for deletion", orphan.ChunkHandle)
+		}
+	}
+	
+	// Clean up old orphan entries that haven't been seen recently
+	m.cleanupStaleOrphanEntries()
+}
+
+// deleteOrphanedChunk sends delete command for an orphaned chunk
+func (m *Master) deleteOrphanedChunk(orphan *OrphanedChunk) error {
+	orphan.mu.RLock()
+	serverID := orphan.ServerID
+	chunkHandle := orphan.ChunkHandle
+	orphan.mu.RUnlock()
+	
+	// Mark chunk as deleted to prevent re-adoption
+	m.deletedChunksMu.Lock()
+	m.deletedChunks[chunkHandle] = true
+	m.deletedChunksMu.Unlock()
+	
+	// Send delete command to the server
+	return m.sendDeleteChunkCommand(serverID, chunkHandle)
+}
+
+// cleanupStaleOrphanEntries removes orphan tracking entries that are too old
+func (m *Master) cleanupStaleOrphanEntries() {
+	m.orphanedChunksMu.Lock()
+	defer m.orphanedChunksMu.Unlock()
+	
+	staleThreshold := time.Hour * 24 // Remove orphan entries older than 24 hours
+	now := time.Now()
+	
+	for handle, orphan := range m.orphanedChunks {
+		orphan.mu.RLock()
+		isStale := now.Sub(orphan.LastSeen) > staleThreshold
+		orphan.mu.RUnlock()
+		
+		if isStale {
+			delete(m.orphanedChunks, handle)
+			log.Printf("Removed stale orphan entry: %s", handle)
+		}
+	}
 }
