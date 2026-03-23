@@ -42,8 +42,15 @@ Repository Layout
 - `configs/` – config files; `development/` samples.
 - `internal/` – master, chunkserver, client implementations.
 - `pkg/` – shared utilities (config resolver, constants, errors, config loader).
+- `examples/` – runnable demos and diagnostics:
+  - `namespace-demo/` (namespace CRUD smoke)
+  - `system-smoke/` (end-to-end client workflow)
+  - `gc-workflow/` (garbage-collection behaviours)
+  - `orphan-detection/` (orphan chunk handling)
+  - `ha-port-check/` (HA port binding sanity)
 - `scripts/` – cluster management helper.
-- `test_gfs_system.go`, `test_scripts/` – system and edge-case tests.
+- `test/` – integration suites grouped by domain (e.g., `test/integration/ha`, `test/integration/dns`).
+- `test_scripts/` – legacy edge-case harnesses.
 - `Makefile` – build/test/proto targets.
 
 Typical Flows
