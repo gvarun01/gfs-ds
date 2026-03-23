@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 
+	"github.com/Mit-Vin/GFS-Distributed-Systems/internal/master/ha/cluster"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,6 +62,12 @@ type Config struct {
 		MaxRequestSize    int64  `yaml:"max_request_size"`
 		ThreadPoolSize    int    `yaml:"thread_pool_size"`
 	} `yaml:"server"`
+
+	// High Availability configuration
+	HA struct {
+		Enabled bool                    `yaml:"enabled"`
+		Cluster *cluster.ClusterConfig `yaml:"cluster,omitempty"`
+	} `yaml:"ha"`
 }
 
 func LoadConfig(path string) (*Config, error) {

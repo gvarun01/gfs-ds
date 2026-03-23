@@ -1,0 +1,79 @@
+# GFS Master Node 1 Configuration (Production HA Setup)
+
+ha:
+  enabled: true
+  cluster:
+    node_id: "gfs-master-1.datacenter1.company.com"
+    cluster_size: 3
+    peer_addrs:
+      - "gfs-master-1.datacenter1.company.com:8080"
+      - "gfs-master-2.datacenter1.company.com:8080"
+      - "gfs-master-3.datacenter2.company.com:8080"  # Cross-datacenter for resilience
+    
+    # Raft consensus (production tuned)
+    election_timeout_min: 200ms   # Slightly higher for network latency
+    election_timeout_max: 400ms
+    heartbeat_interval: 75ms      # More frequent for faster failure detection
+    snapshot_threshold: 5000      # More frequent snapshots
+    
+    # Shadow master settings
+    enable_shadows: true
+    replication_timeout: 10s      # Higher timeout for cross-DC replication
+    readonly_port: 8081
+    
+    # Failover settings
+    enable_failover: true
+    health_check_interval: 2s     # More frequent health checks
+    failover_timeout: 45s         # Longer timeout for production
+    
+    # DNS settings (Route53 example)
+    dns_enabled: true
+    dns_domain: "gfs-master.company.com"
+    dns_ttl: 60s                  # 1 minute TTL for production
+    dns_provider: "route53"
+
+# Production master configuration
+chunk:
+  size: 67108864              # 64 MB chunks
+  naming_pattern: "chunk_%s"
+  checksum_algorithm: "crc32"
+  verify_on_read: true
+
+deletion:
+  g_c_interval: 1800          # 30 minutes GC interval
+  retention_period: 604800    # 7 days retention
+  g_c_delete_batch_size: 1000 # Larger batches for efficiency
+  trash_dir_prefix: "/.trash/"
+
+health:
+  check_interval: 60          # 1 minute health checks
+  timeout: 30                 # 30 second timeout
+  max_failures: 5             # Allow more failures before marking unhealthy
+
+metadata:
+  database:
+    type: "file"
+    path: "/var/gfs/master/metadata.db"
+    backup_interval: 1800     # 30 minute backups
+  max_filename_length: 1024   # Longer filenames allowed
+  max_directory_depth: 200    # Deeper directory structures
+  cache_size_mb: 1024         # 1GB metadata cache
+  cache_ttl_seconds: 600      # 10 minute cache TTL
+
+lease:
+  lease_timeout: 120          # 2 minute leases for stability
+
+operation_log:
+  path: "/var/gfs/master/operation.log"
+
+replication:
+  factor: 3                   # Standard 3x replication
+  timeout: 60                 # 1 minute replication timeout
+
+server:
+  host: "0.0.0.0"            # Listen on all interfaces
+  port: 8080
+  max_connections: 10000      # Support many clients
+  connection_timeout: 60
+  max_request_size: 16777216  # 16 MB max request size
+  thread_pool_size: 50        # Larger thread pool

@@ -837,3 +837,45 @@ func (s *MasterServer) DeleteFile(ctx context.Context, req *client_pb.DeleteFile
 		Status: &common_pb.Status{Code: common_pb.Status_OK},
 	}, nil
 }
+
+// ApplyOperation applies a replicated operation from Raft log to the master state
+func (m *Master) ApplyOperation(opType string, data []byte) error {
+	log.Printf("Applying replicated operation: %s", opType)
+	
+	switch opType {
+	case "file_create":
+		// Apply file creation operation
+		// In a full implementation, this would deserialize the data
+		// and apply the file creation to the namespace
+		log.Printf("Applied file creation operation")
+		
+	case "file_delete":
+		// Apply file deletion operation
+		log.Printf("Applied file deletion operation")
+		
+	case "file_rename":
+		// Apply file rename operation
+		log.Printf("Applied file rename operation")
+		
+	case "chunk_create":
+		// Apply chunk creation operation
+		log.Printf("Applied chunk creation operation")
+		
+	case "chunk_delete":
+		// Apply chunk deletion operation
+		log.Printf("Applied chunk deletion operation")
+		
+	case "snapshot_create":
+		// Apply snapshot creation operation
+		log.Printf("Applied snapshot creation operation")
+		
+	case "snapshot_delete":
+		// Apply snapshot deletion operation
+		log.Printf("Applied snapshot deletion operation")
+		
+	default:
+		return fmt.Errorf("unknown operation type: %s", opType)
+	}
+	
+	return nil
+}

@@ -1,0 +1,86 @@
+# Production DNS-enabled HA configuration
+ha:
+  enabled: true
+  cluster:
+    node_id: "master-production-1"
+    cluster_size: 3
+    peer_addrs: 
+      - "master-production-1.internal:8080"
+      - "master-production-2.internal:8080"  
+      - "master-production-3.internal:8080"
+    raft_port: 9090
+    
+    # Raft consensus settings
+    election_timeout_min: 150ms
+    election_timeout_max: 300ms
+    heartbeat_interval: 50ms
+    snapshot_threshold: 1000
+    
+    # Shadow master settings
+    enable_shadows: true
+    replication_timeout: 5s
+    readonly_port: 8081
+    
+    # Failover settings
+    enable_failover: true
+    health_check_interval: 10s
+    failover_timeout: 30s
+    
+    # DNS failover settings (PRODUCTION FEATURE)
+    dns_enabled: true
+    dns_domain: "gfs.company.com"
+    dns_ttl: 60s
+    dns_provider: "route53"  # route53, cloudflare, or internal
+    
+# Master server configuration  
+server:
+  host: "0.0.0.0"
+  port: 8080
+  max_connections: 1000
+  connection_timeout: 30
+  max_request_size: 1048576
+  thread_pool_size: 10
+
+# Chunk configuration
+chunk:
+  size: 67108864  # 64 MB
+  naming_pattern: "chunk_%s"
+  checksum_algorithm: "crc32"
+  verify_on_read: true
+
+# Health monitoring
+health:
+  check_interval: 30
+  timeout: 10
+  max_failures: 3
+
+# Garbage collection
+deletion:
+  g_c_interval: 300      # 5 minutes
+  retention_period: 259200  # 3 days
+  g_c_delete_batch_size: 100
+  trash_dir_prefix: "/.trash/"
+
+# Replication settings
+replication:
+  factor: 3
+  timeout: 30
+
+# Lease management
+lease:
+  lease_timeout: 60
+
+# Operation log
+operation_log:
+  path: "./production_operations.log"
+
+# Metadata storage
+metadata:
+  database:
+    type: "file"
+    path: "./production_metadata.db"
+    backup_interval: 3600  # 1 hour
+  max_filename_length: 255
+  max_directory_depth: 100
+  cache_size_mb: 512
+  cache_ttl_seconds: 300

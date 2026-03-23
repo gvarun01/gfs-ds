@@ -1,0 +1,79 @@
+# High Availability GFS Configuration Example
+
+ha:
+  enabled: true
+  cluster:
+    node_id: "master-1"
+    cluster_size: 3
+    peer_addrs:
+      - "master-1:8080"
+      - "master-2:8080"
+      - "master-3:8080"
+    
+    # Raft consensus settings
+    election_timeout_min: 150ms
+    election_timeout_max: 300ms
+    heartbeat_interval: 50ms
+    snapshot_threshold: 1000
+    
+    # Shadow master settings
+    enable_shadows: true
+    replication_timeout: 5s
+    readonly_port: 8081
+    
+    # Failover settings
+    enable_failover: true
+    health_check_interval: 1s
+    failover_timeout: 30s
+    
+    # DNS settings
+    dns_enabled: true
+    dns_domain: "gfs-master.cluster.local"
+    dns_ttl: 30s
+    dns_provider: "internal"
+
+# Regular master configuration
+chunk:
+  size: 67108864  # 64 MB
+  naming_pattern: "chunk_%s"
+  checksum_algorithm: "crc32"
+  verify_on_read: true
+
+deletion:
+  g_c_interval: 300
+  retention_period: 259200
+  g_c_delete_batch_size: 100
+  trash_dir_prefix: "/.trash/"
+
+health:
+  check_interval: 30
+  timeout: 10
+  max_failures: 3
+
+metadata:
+  database:
+    type: "file"
+    path: "./master_metadata.db"
+    backup_interval: 3600
+  max_filename_length: 255
+  max_directory_depth: 100
+  cache_size_mb: 128
+  cache_ttl_seconds: 300
+
+lease:
+  lease_timeout: 60
+
+operation_log:
+  path: "./operation.log"
+
+replication:
+  factor: 3
+  timeout: 30
+
+server:
+  host: "localhost"
+  port: 8080
+  max_connections: 1000
+  connection_timeout: 30
+  max_request_size: 4194304  # 4 MB
+  thread_pool_size: 10
