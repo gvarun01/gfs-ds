@@ -163,13 +163,22 @@ func (s *MasterServer) ReportChunk(req *chunk_pb.ReportChunkRequest, stream chun
 		serverInfo.Chunks[chunkHandle] = true
 		serverInfo.mu.Unlock()
 	}
-	s.Master.chunksMu.Unlock()
+s.Master.chunksMu.Unlock()
 
 	for {
 		select {
 		case response, ok := <-responseChan:
 			if !ok {
-	return nil
+				return nil
+			}
+
+			if err := stream.Send(response); err != nil {
+				return err
+			}
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
 }
 
 // Helper methods for testing orphaned chunk detection

@@ -435,6 +435,7 @@ func (s *MasterServer) generateChunkCommands(serverId string) []*chunk_pb.ChunkC
 		var remainingOps []*PendingOperation
 		for _, op := range pendingOps {
 			if op.AttemptCount > 0 {
+				remainingOps = append(remainingOps, op)
 				continue
 			}
 
@@ -446,9 +447,34 @@ func (s *MasterServer) generateChunkCommands(serverId string) []*chunk_pb.ChunkC
 			if op.Type == chunk_pb.ChunkCommand_REPLICATE {
 				command.TargetLocations = make([]*common_pb.ChunkLocation, len(op.Targets))
 				for i, target := range op.Targets {
-					command.TargetLocations[i] = &common_pb.ChunkLocation{
-						ServerId:      target,
-						ServerAddress: s.Master.servers[target].Address,
+					if serverInfo, ok := s.Master.servers[target]; ok {
+						command.TargetLocations[i] = &common_pb.ChunkLocation{
+							ServerId:      target,
+							ServerAddress: serverInfo.Address,
+						}
+					}
+				}
+
+				if op.Source != "" {
+					command.SourceLocation = &common_pb.ChunkLocation{
+						ServerId: op.Source,
+					}
+				}
+			}
+
+			op.AttemptCount++
+			op.LastAttempt = time.Now()
+			commands = append(commands, command)
+			remainingOps = append(remainingOps, op)
+		}
+		s.Master.pendingOps[serverId] = remainingOps
+	}
+	s.Master.pendingOpsMu.Unlock()
+
+	return commands
+}
+
+// processExpeditedDeletions processes files marked for expedited deletion
 // processExpeditedDeletions processes files marked for expedited deletion
 // This method is called from the garbage collection cycle
 func (m *Master) processExpeditedDeletions() {

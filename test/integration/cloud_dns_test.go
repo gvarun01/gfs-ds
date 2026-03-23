@@ -1,4 +1,4 @@
-package dns
+package ha_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Mit-Vin/GFS-Distributed-Systems/internal/master/ha/cluster"
+	dns "github.com/Mit-Vin/GFS-Distributed-Systems/internal/master/ha/dns"
 )
 
 // TestRoute53Provider tests Route53 DNS provider functionality
@@ -29,13 +30,13 @@ func TestRoute53Provider(t *testing.T) {
 	}
 
 	t.Run("CreateProvider", func(t *testing.T) {
-		provider, err := NewRoute53Provider(config)
+		provider, err := dns.NewRoute53Provider(config)
 		if err != nil {
 			// Expected to fail with test credentials
 			t.Logf("Expected error with test credentials: %v", err)
 			return
 		}
-		
+
 		if provider.Name() != "route53" {
 			t.Errorf("Expected provider name 'route53', got %s", provider.Name())
 		}
@@ -45,8 +46,8 @@ func TestRoute53Provider(t *testing.T) {
 		// Test missing hosted zone ID
 		invalidConfig := *config
 		invalidConfig.Route53Config = &cluster.Route53Config{}
-		
-		_, err := NewRoute53Provider(&invalidConfig)
+
+		_, err := dns.NewRoute53Provider(&invalidConfig)
 		if err == nil {
 			t.Error("Expected error for missing hosted zone ID")
 		}
@@ -60,15 +61,15 @@ func TestRoute53Provider(t *testing.T) {
 			UseIAMRole:   false,
 			// Missing access keys
 		}
-		
-		_, err := NewRoute53Provider(&invalidConfig)
+
+		_, err := dns.NewRoute53Provider(&invalidConfig)
 		if err == nil {
 			t.Error("Expected error for missing credentials")
 		}
 	})
 }
 
-// TestCloudflareProvider tests Cloudflare DNS provider functionality  
+// TestCloudflareProvider tests Cloudflare DNS provider functionality
 func TestCloudflareProvider(t *testing.T) {
 	// Skip if no Cloudflare credentials available
 	if testing.Short() {
@@ -77,24 +78,24 @@ func TestCloudflareProvider(t *testing.T) {
 
 	config := &cluster.ClusterConfig{
 		DNSEnabled:  true,
-		DNSDomain:   "test.example.com", 
+		DNSDomain:   "test.example.com",
 		DNSTTL:      30 * time.Second,
 		DNSProvider: "cloudflare",
 		CloudflareConfig: &cluster.CloudflareConfig{
-			ZoneID:       "abcdef123456789test",
-			UseAPIToken:  true,
-			APIToken:     "test-token",
+			ZoneID:      "abcdef123456789test",
+			UseAPIToken: true,
+			APIToken:    "test-token",
 		},
 	}
 
 	t.Run("CreateProvider", func(t *testing.T) {
-		provider, err := NewCloudflareProvider(config)
+		provider, err := dns.NewCloudflareProvider(config)
 		if err != nil {
 			// Expected to fail with test credentials
 			t.Logf("Expected error with test credentials: %v", err)
 			return
 		}
-		
+
 		if provider.Name() != "cloudflare" {
 			t.Errorf("Expected provider name 'cloudflare', got %s", provider.Name())
 		}
@@ -107,8 +108,8 @@ func TestCloudflareProvider(t *testing.T) {
 			UseAPIToken: true,
 			APIToken:    "test-token",
 		}
-		
-		_, err := NewCloudflareProvider(&invalidConfig)
+
+		_, err := dns.NewCloudflareProvider(&invalidConfig)
 		if err == nil {
 			t.Error("Expected error for missing zone ID")
 		}
@@ -122,8 +123,8 @@ func TestCloudflareProvider(t *testing.T) {
 			UseAPIToken: true,
 			// Missing APIToken
 		}
-		
-		_, err := NewCloudflareProvider(&invalidConfig)
+
+		_, err := dns.NewCloudflareProvider(&invalidConfig)
 		if err == nil {
 			t.Error("Expected error for missing API token")
 		}
@@ -133,13 +134,13 @@ func TestCloudflareProvider(t *testing.T) {
 		// Test API key configuration
 		apiKeyConfig := *config
 		apiKeyConfig.CloudflareConfig = &cluster.CloudflareConfig{
-			ZoneID:      "test-zone", 
+			ZoneID:      "test-zone",
 			UseAPIToken: false,
 			APIKey:      "test-key",
 			// Missing Email
 		}
-		
-		_, err := NewCloudflareProvider(&apiKeyConfig)
+
+		_, err := dns.NewCloudflareProvider(&apiKeyConfig)
 		if err == nil {
 			t.Error("Expected error for missing email with API key")
 		}
@@ -156,13 +157,13 @@ func TestDNSManager(t *testing.T) {
 			DNSProvider: "internal",
 		}
 
-		manager, err := NewDNSManager(config)
+		manager, err := dns.NewDNSManager(config)
 		if err != nil {
 			t.Fatalf("Failed to create DNS manager with internal provider: %v", err)
 		}
 
-		if manager.provider.Name() != "internal" {
-			t.Errorf("Expected internal provider, got %s", manager.provider.Name())
+		if manager.Provider().Name() != "internal" {
+			t.Errorf("Expected internal provider, got %s", manager.Provider().Name())
 		}
 	})
 
@@ -171,7 +172,7 @@ func TestDNSManager(t *testing.T) {
 			DNSEnabled: false,
 		}
 
-		_, err := NewDNSManager(config)
+		_, err := dns.NewDNSManager(config)
 		if err == nil {
 			t.Error("Expected error when DNS is disabled")
 		}
@@ -183,7 +184,7 @@ func TestDNSManager(t *testing.T) {
 			DNSProvider: "unsupported",
 		}
 
-		_, err := NewDNSManager(config)
+		_, err := dns.NewDNSManager(config)
 		if err == nil {
 			t.Error("Expected error for unsupported DNS provider")
 		}
@@ -199,12 +200,12 @@ func TestCloudDNSProviderInterface(t *testing.T) {
 				UseIAMRole:   true,
 			},
 		}
-		
+
 		// This will fail but we're testing the interface compliance
-		provider, _ := NewRoute53Provider(config)
+		provider, _ := dns.NewRoute53Provider(config)
 		if provider != nil {
-			var _ DNSProvider = provider
-			t.Log("Route53Provider correctly implements DNSProvider interface")
+			var _ dns.DNSProvider = provider
+			t.Log("Route53Provider correctly implements dns.DNSProvider interface")
 		}
 	})
 
@@ -216,12 +217,12 @@ func TestCloudDNSProviderInterface(t *testing.T) {
 				APIToken:    "test",
 			},
 		}
-		
+
 		// This will fail but we're testing the interface compliance
-		provider, _ := NewCloudflareProvider(config)
+		provider, _ := dns.NewCloudflareProvider(config)
 		if provider != nil {
-			var _ DNSProvider = provider
-			t.Log("CloudflareProvider correctly implements DNSProvider interface")
+			var _ dns.DNSProvider = provider
+			t.Log("CloudflareProvider correctly implements dns.DNSProvider interface")
 		}
 	})
 }
@@ -239,7 +240,7 @@ func BenchmarkDNSOperations(b *testing.B) {
 		DNSProvider: "internal",
 	}
 
-	manager, err := NewDNSManager(config)
+	manager, err := dns.NewDNSManager(config)
 	if err != nil {
 		b.Fatalf("Failed to create DNS manager: %v", err)
 	}
@@ -248,7 +249,7 @@ func BenchmarkDNSOperations(b *testing.B) {
 
 	b.Run("UpdateRecord", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			err := manager.provider.UpdateRecord(ctx, 
+			err := manager.Provider().UpdateRecord(ctx,
 				fmt.Sprintf("test-%d.%s", i, config.DNSDomain),
 				"A", "192.168.1.1", 30)
 			if err != nil {
@@ -260,11 +261,11 @@ func BenchmarkDNSOperations(b *testing.B) {
 	b.Run("GetRecord", func(b *testing.B) {
 		// Setup a record first
 		testDomain := fmt.Sprintf("get-test.%s", config.DNSDomain)
-		manager.provider.UpdateRecord(ctx, testDomain, "A", "192.168.1.1", 30)
+		manager.Provider().UpdateRecord(ctx, testDomain, "A", "192.168.1.1", 30)
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := manager.provider.GetRecord(ctx, testDomain, "A")
+			_, err := manager.Provider().GetRecord(ctx, testDomain, "A")
 			if err != nil {
 				b.Errorf("GetRecord failed: %v", err)
 			}
@@ -277,11 +278,11 @@ func TestDNSProviderFailover(t *testing.T) {
 	config := &cluster.ClusterConfig{
 		DNSEnabled:  true,
 		DNSDomain:   "failover.test.local",
-		DNSTTL:      30 * time.Second, 
+		DNSTTL:      30 * time.Second,
 		DNSProvider: "internal",
 	}
 
-	manager, err := NewDNSManager(config)
+	manager, err := dns.NewDNSManager(config)
 	if err != nil {
 		t.Fatalf("Failed to create DNS manager: %v", err)
 	}
@@ -297,7 +298,7 @@ func TestDNSProviderFailover(t *testing.T) {
 		// Simulate multiple master failovers
 		masters := []string{
 			"master1.example.com",
-			"master2.example.com", 
+			"master2.example.com",
 			"master3.example.com",
 		}
 
@@ -316,7 +317,7 @@ func TestDNSProviderFailover(t *testing.T) {
 				t.Errorf("Failed to get current master: %v", err)
 			}
 
-			expectedHost := extractHost(master)
+			expectedHost := dns.ExtractHost(master)
 			if current != expectedHost {
 				t.Errorf("Expected master %s, got %s", expectedHost, current)
 			}
@@ -351,7 +352,7 @@ func TestDNSProviderFailover(t *testing.T) {
 			t.Errorf("Failed to get recreated master: %v", err)
 		}
 
-		expectedHost := extractHost(newMaster)
+		expectedHost := dns.ExtractHost(newMaster)
 		if current != expectedHost {
 			t.Errorf("Expected recreated master %s, got %s", expectedHost, current)
 		}
@@ -373,9 +374,9 @@ func TestExtractHost(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		result := extractHost(tc.input)
+		result := dns.ExtractHost(tc.input)
 		if result != tc.expected {
-			t.Errorf("extractHost(%s) = %s, expected %s", tc.input, result, tc.expected)
+			t.Errorf("dns.ExtractHost(%s) = %s, expected %s", tc.input, result, tc.expected)
 		}
 	}
 }

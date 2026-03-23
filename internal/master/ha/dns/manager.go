@@ -14,13 +14,13 @@ import (
 type DNSProvider interface {
 	// UpdateRecord updates a DNS record to point to the specified address
 	UpdateRecord(ctx context.Context, domain, recordType, value string, ttl int) error
-	
+
 	// DeleteRecord removes a DNS record
 	DeleteRecord(ctx context.Context, domain, recordType string) error
-	
+
 	// GetRecord retrieves the current DNS record value
 	GetRecord(ctx context.Context, domain, recordType string) (string, error)
-	
+
 	// Name returns the provider name
 	Name() string
 }
@@ -29,14 +29,14 @@ type DNSProvider interface {
 type DNSManager struct {
 	config   *cluster.ClusterConfig
 	provider DNSProvider
-	
+
 	// Current state
 	currentMaster string
 	masterDomain  string
-	
+
 	// Synchronization
 	mu sync.RWMutex
-	
+
 	// Background updater
 	updateCh   chan DNSUpdate
 	shutdownCh chan struct{}
@@ -57,13 +57,13 @@ func NewDNSManager(config *cluster.ClusterConfig) (*DNSManager, error) {
 	if !config.DNSEnabled {
 		return nil, fmt.Errorf("DNS management not enabled")
 	}
-	
+
 	// Create provider based on configuration
 	provider, err := createProvider(config.DNSProvider, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DNS provider: %v", err)
 	}
-	
+
 	manager := &DNSManager{
 		config:       config,
 		provider:     provider,
@@ -71,8 +71,13 @@ func NewDNSManager(config *cluster.ClusterConfig) (*DNSManager, error) {
 		updateCh:     make(chan DNSUpdate, 10),
 		shutdownCh:   make(chan struct{}),
 	}
-	
+
 	return manager, nil
+}
+
+// Provider returns the configured DNS provider (primarily for testing/verification).
+func (dm *DNSManager) Provider() DNSProvider {
+	return dm.provider
 }
 
 // createProvider creates a DNS provider based on the provider type
@@ -93,19 +98,19 @@ func createProvider(providerType string, config *cluster.ClusterConfig) (DNSProv
 func (dm *DNSManager) Start(ctx context.Context) error {
 	dm.runMu.Lock()
 	defer dm.runMu.Unlock()
-	
+
 	if dm.running {
 		return fmt.Errorf("DNS manager already running")
 	}
-	
+
 	log.Printf("Starting DNS manager with provider: %s", dm.provider.Name())
-	
+
 	// Start background updater
 	go dm.runUpdater(ctx)
-	
+
 	dm.running = true
 	log.Printf("DNS manager started, managing domain: %s", dm.masterDomain)
-	
+
 	return nil
 }
 
@@ -113,15 +118,15 @@ func (dm *DNSManager) Start(ctx context.Context) error {
 func (dm *DNSManager) Stop() error {
 	dm.runMu.Lock()
 	defer dm.runMu.Unlock()
-	
+
 	if !dm.running {
 		return nil
 	}
-	
+
 	log.Printf("Stopping DNS manager")
 	close(dm.shutdownCh)
 	dm.running = false
-	
+
 	return nil
 }
 
@@ -129,24 +134,24 @@ func (dm *DNSManager) Stop() error {
 func (dm *DNSManager) UpdateMasterRecord(masterAddr string) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
-	
+
 	if masterAddr == dm.currentMaster {
 		log.Printf("DNS record already points to %s, skipping update", masterAddr)
 		return nil
 	}
-	
+
 	log.Printf("Updating master DNS record from %s to %s", dm.currentMaster, masterAddr)
-	
+
 	// Extract IP/hostname from address (remove port if present)
-	host := extractHost(masterAddr)
-	
+	host := ExtractHost(masterAddr)
+
 	update := DNSUpdate{
 		Operation: "set",
 		Domain:    dm.masterDomain,
 		Value:     host,
 		TTL:       int(dm.config.DNSTTL.Seconds()),
 	}
-	
+
 	select {
 	case dm.updateCh <- update:
 		dm.currentMaster = masterAddr
@@ -161,20 +166,20 @@ func (dm *DNSManager) UpdateMasterRecord(masterAddr string) error {
 func (dm *DNSManager) DeleteMasterRecord() error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
-	
+
 	if dm.currentMaster == "" {
 		return nil // Nothing to delete
 	}
-	
+
 	log.Printf("Deleting master DNS record for %s", dm.masterDomain)
-	
+
 	update := DNSUpdate{
 		Operation: "delete",
 		Domain:    dm.masterDomain,
 		Value:     "",
 		TTL:       0,
 	}
-	
+
 	select {
 	case dm.updateCh <- update:
 		dm.currentMaster = ""
@@ -189,12 +194,12 @@ func (dm *DNSManager) DeleteMasterRecord() error {
 func (dm *DNSManager) GetCurrentMaster() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	value, err := dm.provider.GetRecord(ctx, dm.masterDomain, "A")
 	if err != nil {
 		return "", fmt.Errorf("failed to get DNS record: %v", err)
 	}
-	
+
 	return value, nil
 }
 
@@ -214,12 +219,12 @@ func (dm *DNSManager) runUpdater(ctx context.Context) {
 
 // processUpdate processes a single DNS update
 func (dm *DNSManager) processUpdate(ctx context.Context, update DNSUpdate) {
-	log.Printf("Processing DNS update: %s %s -> %s (TTL: %d)", 
+	log.Printf("Processing DNS update: %s %s -> %s (TTL: %d)",
 		update.Operation, update.Domain, update.Value, update.TTL)
-	
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	
+
 	var err error
 	switch update.Operation {
 	case "set":
@@ -230,18 +235,18 @@ func (dm *DNSManager) processUpdate(ctx context.Context, update DNSUpdate) {
 		log.Printf("Unknown DNS operation: %s", update.Operation)
 		return
 	}
-	
+
 	if err != nil {
 		log.Printf("DNS update failed: %v", err)
 		// Could implement retry logic here
 	} else {
-		log.Printf("DNS update successful: %s %s -> %s", 
+		log.Printf("DNS update successful: %s %s -> %s",
 			update.Operation, update.Domain, update.Value)
 	}
 }
 
-// extractHost extracts the hostname/IP from an address (removes port)
-func extractHost(addr string) string {
+// ExtractHost extracts the hostname/IP from an address (removes port)
+func ExtractHost(addr string) string {
 	// Simple implementation - in production would use net.SplitHostPort
 	if idx := lastIndex(addr, ':'); idx != -1 {
 		return addr[:idx]
